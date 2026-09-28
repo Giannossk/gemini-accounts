@@ -13,12 +13,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_accounts.native import read_identity, read_rate_limits
-from codex_accounts.state import AccountError
+from gemini_accounts.native import read_identity, read_rate_limits
+from gemini_accounts.state import AccountError
 
 SOURCE = Path(__file__).resolve().parents[1]
 
-FAKE_CODEX = r"""
+FAKE_GEMINI = r"""
 import json
 import os
 import sys
@@ -26,18 +26,21 @@ import time
 from pathlib import Path
 
 args = sys.argv[1:]
-home = Path(os.environ["CODEX_HOME"])
+home = Path(os.environ.get("GEMINI_CLI_HOME") or os.environ.get("CODEX_HOME"))
 event = {
     "args": args, "home": str(home), "cwd": os.getcwd(), "pid": os.getpid(),
-    "sqlite_home": os.environ.get("CODEX_SQLITE_HOME"),
+    "sqlite_home": os.environ.get("GEMINI_HISTORY_HOME") or os.environ.get("CODEX_SQLITE_HOME"),
     "auth_overrides": [name for name in
-        ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN") if name in os.environ],
+        ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN") if name in os.environ],
 }
 def log(value):
-    with open(os.environ["TEST_CODEX_LOG"], "a") as handle:
+    with open(os.environ.get("TEST_GEMINI_LOG") or os.environ.get("TEST_CODEX_LOG"), "a") as handle:
         handle.write(json.dumps(value) + "\n")
 log(event)
 credential = home / "auth.json"
+if args == ["--help"]:
+    print("Usage: gemini [login|logout|app-server]")
+    sys.exit(0)
 if args == ["app-server"]:
     for line in sys.stdin:
         request = json.loads(line)
@@ -52,7 +55,7 @@ if args == ["app-server"]:
                 continue
             account = None
             if credential.exists():
-                account = {"type": "chatgpt", **json.loads(credential.read_text())}
+                account = {"type": "google", **json.loads(credential.read_text())}
                 account["accessToken"] = "secret-token-do-not-print"
             print(json.dumps({"method": "account/updated", "params": {}}), flush=True)
             print(json.dumps({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}}), flush=True)
@@ -64,7 +67,7 @@ if args == ["app-server"]:
                 continue
             quota = home / "quota.json"
             result = json.loads(quota.read_text()) if quota.exists() else {"rateLimits": {
-                "limitId": "codex",
+                "limitId": "gemini",
                 "primary": {"usedPercent": 25, "windowDurationMins": 300},
                 "secondary": {"usedPercent": 58, "windowDurationMins": 10080},
             }}
@@ -76,12 +79,18 @@ if args and args[0] == "login":
         sys.exit(7)
     if delay := os.environ.get("TEST_LOGIN_DELAY"):
         time.sleep(float(delay))
-    credential.write_text(json.dumps({
+    data = {
         "email": os.environ.get("TEST_EMAIL", "alice@example.com"),
-        "planType": os.environ.get("TEST_PLAN", "pro"),
+        "planType": os.environ.get("TEST_PLAN", "google"),
+    }
+    credential.write_text(json.dumps(data))
+    (home / "google_accounts.json").write_text(json.dumps({
+        "active": os.environ.get("TEST_EMAIL", "alice@example.com"),
+        "old": [],
     }))
 elif args == ["logout"]:
     credential.unlink(missing_ok=True)
+    (home / "google_accounts.json").unlink(missing_ok=True)
 elif args == ["--refresh-token"]:
     (home / "refreshed").touch()
 elif args == ["--echo-stdin"]:
@@ -113,28 +122,39 @@ class AccountsTests(unittest.TestCase):
         self.original = self.root / "original"
         self.original.mkdir()
         (self.original / "auth.json").write_text(
-            json.dumps({"email": "original@example.com", "planType": "plus"})
+            json.dumps({"email": "original@example.com", "planType": "google"})
+        )
+        (self.original / "google_accounts.json").write_text(
+            json.dumps({"active": "original@example.com", "old": []})
         )
         self.log = self.root / "events.jsonl"
-        self.binary = self.root / "codex fixture"
-        self.binary.write_text(f"#!{sys.executable}\n{FAKE_CODEX}")
+        self.binary = self.root / "gemini fixture"
+        self.binary.write_text(f"#!{sys.executable}\n{FAKE_GEMINI}")
         self.binary.chmod(0o700)
         self.env = {
             **os.environ,
             "PYTHONPATH": str(SOURCE),
+            "GEMINI_ACCOUNTS_HOME": str(self.registry),
             "CODEX_ACCOUNTS_HOME": str(self.registry),
+            "GEMINI_ACCOUNTS_HISTORY_HOME": str(self.original),
             "CODEX_ACCOUNTS_HISTORY_HOME": str(self.original),
+            "GEMINI_ACCOUNTS_GEMINI_BIN": str(self.binary),
             "CODEX_ACCOUNTS_CODEX_BIN": str(self.binary),
+            "GEMINI_CLI_HOME": str(self.original),
             "CODEX_HOME": str(self.original),
+            "TEST_GEMINI_LOG": str(self.log),
             "TEST_CODEX_LOG": str(self.log),
+            "GEMINI_API_KEY": "test-env-key",
+            "GOOGLE_API_KEY": "test-env-key",
             "OPENAI_API_KEY": "test-env-key",
             "CODEX_API_KEY": "test-env-key",
             "CODEX_ACCESS_TOKEN": "test-env-token",
+            "TEST_FORCE_LOGIN_SUPPORT": "1",
         }
 
     def invoke(self, *arguments, code=0, env=None, stdin=None):
         result = subprocess.run(
-            [sys.executable, "-m", "codex_accounts", *arguments],
+            [sys.executable, "-m", "gemini_accounts", *arguments],
             env=self.env if env is None else env,
             input=stdin,
             cwd=self.root,
@@ -365,7 +385,7 @@ class AccountsTests(unittest.TestCase):
                 self.assertEqual(
                     self.state()["selected"], self.record("bob@example.com")[0]
                 )
-                self.assertNotIn("Run codex to start", result.stdout)
+                self.assertNotIn("Run gemini to start", result.stdout)
 
     def test_select_and_run_starts_the_selected_cli(self):
         self.add()
@@ -441,7 +461,7 @@ class AccountsTests(unittest.TestCase):
                 json.loads((home / "auth.json").read_text())["email"], record["email"]
             )
 
-    def test_share_data_migrates_without_launching_codex_or_changing_selection(self):
+    def test_share_data_migrates_without_launching_gemini_or_changing_selection(self):
         self.add()
         self.add("bob@example.com")
         self.invoke("select", "account", "alice@example.com")
@@ -582,7 +602,7 @@ class AccountsTests(unittest.TestCase):
         self.add()
         init = self.invoke("shell-init", "bash").stdout
         result = subprocess.run(
-            ["bash", "--noprofile", "--norc", "-c", init + "\ncodex list accounts"],
+            ["bash", "--noprofile", "--norc", "-c", init + "\ngemini list accounts"],
             env=self.env,
             capture_output=True,
             text=True,
@@ -590,10 +610,10 @@ class AccountsTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("alice@example.com", result.stdout)
-        self.assertIn("codex add account", self.invoke("--help").stdout)
+        self.assertIn("gemini add account", self.invoke("--help").stdout)
 
     def test_recursive_backend_is_rejected(self):
-        (self.root / "codex-accounts").symlink_to(self.binary)
+        (self.root / "gemini-accounts").symlink_to(self.binary)
         self.invoke(
             "--version",
             env={**self.env, "PATH": str(self.root) + os.pathsep + self.env["PATH"]},
@@ -639,7 +659,7 @@ class AccountsTests(unittest.TestCase):
         self.add("bob@example.com")
         processes = [
             subprocess.Popen(
-                [sys.executable, "-m", "codex_accounts", "select", "account", email],
+                [sys.executable, "-m", "gemini_accounts", "select", "account", email],
                 env=self.env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -658,7 +678,7 @@ class AccountsTests(unittest.TestCase):
         self.invoke("select", "account", "alice@example.com")
         ready, release = self.root / "ready", self.root / "release"
         with subprocess.Popen(
-            [sys.executable, "-m", "codex_accounts", "--wait-and-report"],
+            [sys.executable, "-m", "gemini_accounts", "--wait-and-report"],
             env={**self.env, "TEST_READY": str(ready), "TEST_RELEASE": str(release)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -684,7 +704,7 @@ class AccountsTests(unittest.TestCase):
         self.addCleanup(os.close, slave)
         original = termios.tcgetattr(slave)
         child = subprocess.Popen(
-            [sys.executable, "-m", "codex_accounts", "select", "account"],
+            [sys.executable, "-m", "gemini_accounts", "select", "account"],
             env={**self.env, "TERM": "xterm-256color", "COLUMNS": "80", "LINES": "24"},
             stdin=slave,
             stdout=slave,

@@ -1,4 +1,4 @@
-"""Share Codex's persistent files without moving any login's credential home."""
+"""Share Gemini's persistent files without moving any login's credential home."""
 
 import filecmp
 import json
@@ -22,7 +22,7 @@ from .history import (
 )
 from .state import AccountError, Store, file_lock, private_directory
 
-MARKER = ".codex-accounts-shared"
+MARKER = ".gemini-accounts-shared"
 # Prelink extensible directories even before the first skill/rule/etc. is added.
 DIRECTORIES = (
     "skills",
@@ -30,11 +30,15 @@ DIRECTORIES = (
     "rules",
     "prompts",
     "agents",
+    "commands",
+    "extensions",
+    "tools",
     "memories",
     "automations",
     "hooks",
     "cache",
     "log",
+    "history",
     "shell_snapshots",
 )
 
@@ -44,13 +48,23 @@ def shareable(name: str) -> bool:
     plain = name.lstrip(".").casefold()
     if any(
         plain == word or plain.startswith((word + ".", word + "-", word + "_"))
-        for word in ("auth", "credentials", "secrets", "tokens", "keyring")
+        for word in (
+            "auth",
+            "credentials",
+            "secrets",
+            "tokens",
+            "keyring",
+            "google_accounts",
+            "oauth_creds",
+            "oauth",
+            "accounts",
+        )
     ):
         return False
     return not (
         name in HISTORY_DIRECTORIES + HISTORY_FILES
         or plain in ("tmp", "sandbox", "sandbox-secrets", "env")
-        or plain.startswith(("codex-accounts-", "history-", "shared-", "backup"))
+        or plain.startswith(("gemini-accounts-", "codex-accounts-", "history-", "shared-", "backup"))
         or ".backup" in plain
         or ".sqlite" in plain
         or plain.endswith((".lock", ".sock", ".pid"))
@@ -193,6 +207,34 @@ def _merge_config(source: Path, target: Path, backup: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _merge_json_config(source: Path, target: Path, backup: Path) -> None:
+    try:
+        source_value = json.loads(source.read_text(encoding="utf-8"))
+        target_value = json.loads(target.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError) as error:
+        raise AccountError(
+            f"Invalid configuration at {source} or {target}; originals retained."
+        ) from error
+    if not isinstance(source_value, dict) or not isinstance(target_value, dict):
+        return
+    if not _merge_missing(target_value, source_value):
+        return
+    contents = json.dumps(target_value, indent=2) + "\n"
+    destination = target.resolve()
+    _save_original(destination, backup)
+    temporary = destination.with_name(f".shared-{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            if os.name == "posix":
+                temporary.chmod(0o600)
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _merge(
     source: Path,
     target: Path,
@@ -247,6 +289,8 @@ def _merge(
             return
         if repair and source.stat().st_mtime_ns > target.stat().st_mtime_ns:
             _replace_file(source, target, backup)
+        elif source.name in ("settings.json", "mcp_config.json") or source.name.endswith(".settings.json"):
+            _merge_json_config(source, target, backup)
         elif source.name == "config.toml" or source.name.endswith(".config.toml"):
             _merge_config(source, target, backup)
     # Conflicts keep the existing shared version; the entire source is backed up.
@@ -267,7 +311,7 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                 raise AccountError(
                     "Shared and account homes cannot contain one another."
                 )
-        names = set(DIRECTORIES) | {"config.toml"}
+        names = set(DIRECTORIES) | {"config.toml", "settings.json"}
         for home in [target, *sorted(candidates)]:
             names.update(path.name for path in home.iterdir() if shareable(path.name))
         # Check links are supported in every home before migrating settings.
@@ -279,12 +323,17 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                 create_link(probe, target, target_is_directory=True)
             except OSError as error:
                 raise AccountError(
-                    "Shared Codex data requires symbolic links or NTFS junctions."
+                    "Shared Gemini data requires symbolic links or NTFS junctions."
                 ) from error
             finally:
                 remove_link(probe)
         for name in DIRECTORIES:
             private_directory(target / name)
+        if not (target / "settings.json").exists():
+            if os.name == "posix":
+                (target / "settings.json").touch(mode=0o600)
+            else:
+                (target / "settings.json").touch()
         if not (target / "config.toml").exists():
             if os.name == "posix":
                 (target / "config.toml").touch(mode=0o600)
@@ -312,6 +361,8 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
         for home, pending, backup in migrations:
             for name in pending:
                 source, destination = home / name, target / name
+                if not destination.exists() and not is_link(destination):
+                    continue
                 if source.exists() or is_link(source):
                     private_directory(backup / "account")
                     source.rename(backup / "account" / name)
@@ -330,7 +381,7 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
             )
             if backup.exists():
                 print(
-                    f"Shared Codex data in {target}. Originals retained at {backup}.",
+                    f"Shared Gemini data in {target}. Originals retained at {backup}.",
                     file=sys.stderr,
                 )
         return target

@@ -7,9 +7,9 @@ from datetime import date, datetime, time, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_accounts.history import prepare_history
-from codex_accounts.shared import DIRECTORIES, MARKER, _toml_document, prepare_home
-from codex_accounts.state import AccountError, Store
+from gemini_accounts.history import prepare_history
+from gemini_accounts.shared import DIRECTORIES, MARKER, _toml_document, prepare_home
+from gemini_accounts.state import AccountError, Store
 
 
 class SharedHomeTests(unittest.TestCase):
@@ -32,7 +32,10 @@ class SharedHomeTests(unittest.TestCase):
             self.skipTest("Symbolic links are unavailable")
         probe.unlink()
         environment = patch.dict(
-            os.environ, {"CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared)}
+            os.environ, {
+                "GEMINI_ACCOUNTS_HISTORY_HOME": str(self.shared),
+                "CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared),
+            }
         )
         environment.start()
         self.addCleanup(environment.stop)
@@ -116,6 +119,8 @@ class SharedHomeTests(unittest.TestCase):
             "secrets/codex_auth.age",
             "secrets/mcp_oauth.age",
             "tokens.json",
+            "google_accounts.json",
+            "oauth_creds.json",
             ".env",
             "backups/auth.json",
             "tmp/process/file",

@@ -1,46 +1,46 @@
-# Codex Accounts
+# Gemini Accounts
 
-A complete terminal account selector for the official Codex CLI. Sign into each
+A complete terminal account selector for the official Google Gemini CLI. Sign into each
 account once, list the discovered email addresses, and manually choose which
-account Codex uses. Skills, plugins, settings, instructions, and history are
-shared across accounts; each login keeps its own credentials.
+account Gemini uses. Skills, extensions, settings, commands, tools, agents, and history
+are shared across accounts; each login keeps its own credentials.
 
 ## Everyday commands
 
 ```bash
-codex add account
-codex list accounts
-codex select account
+gemini add account
+gemini list accounts
+gemini select account
 ```
 
-Each `codex add account` starts the official browser sign-in flow in a new,
+Each `gemini add account` starts the official sign-in flow in a new,
 private account home. Choose the account to add in the browser. After sign-in,
-its email and subscription plan are discovered automatically. No account names
+its email and subscription/account details are discovered automatically. No account names
 or labels are requested.
 
-`codex list accounts` displays every saved email, its plan, and a star beside
+`gemini list accounts` displays every saved email, its plan, and a star beside
 the selected account. For example:
 
 ```text
 Saved accounts
 
- * 1. alice@example.com  (pro)
-   2. bob@example.com  (plus)
+ * 1. alice@example.com  (google)
+   2. bob@example.com  (google)
 
-* Selected for new Codex sessions
+* Selected for new Gemini sessions
 ```
 
-`codex select account` opens the account picker. Use **Up/Down** or **j/k**,
-then **Enter** to select and start Codex. **Esc**, **q**, or **Ctrl+C** cancels
-without changing the selection or starting Codex. A numbered-input menu is used
+`gemini select account` opens the account picker. Use **Up/Down** or **j/k**,
+then **Enter** to select and start Gemini. **Esc**, **q**, or **Ctrl+C** cancels
+without changing the selection or starting Gemini. A numbered-input menu is used
 when arrow-key terminal support is unavailable. Long lists scroll in the terminal.
 
 The picker checks each saved account's live quota and shows the percentage left
 in its 5-hour and weekly windows, like `/status`:
 
 ```text
- > 1. alice@example.com  (pro)  5h: 75% left | weekly: 42% left
-   2. bob@example.com  (plus)  5h: 0% left | weekly: 18% left
+ > 1. alice@example.com  (google)  5h: 75% left | weekly: 42% left
+   2. bob@example.com  (google)  5h: 0% left | weekly: 18% left
 ```
 
 Quotas are refreshed in parallel whenever the picker opens. These percentages
@@ -49,32 +49,31 @@ Missing windows, signed-out accounts, unsupported account types, and failed
 lookups show `unavailable`; the account can still be selected. Each lookup has a
 short timeout. Selecting an email or number directly skips quota lookups.
 
-Selection starts Codex immediately and is saved for future launches. Later,
-run `codex` to reuse the selected account. To select without starting Codex:
+Selection starts Gemini immediately and is saved for future launches. Later,
+run `gemini` to reuse the selected account. To select without starting Gemini:
 
 ```bash
-codex select account --no-run
+gemini select account --no-run
 ```
 
-The existing `--run` flag is still accepted. A running Codex session keeps its
-account. Exit it normally and use `codex select account` to choose a different
+The existing `--run` flag is still accepted. A running Gemini session keeps its
+account. Exit it normally and use `gemini select account` to choose a different
 account and start another session; logging out is unnecessary.
 
 ## More controls
 
 | Command | Behavior |
 | --- | --- |
-| `codex select account alice@example.com` | Select an email directly and start Codex. |
-| `codex select account 2` | Select a number from the displayed list and start Codex. |
-| `codex select account --no-run` | Select an account without starting Codex. |
-| `codex current account` | Show the selected email. |
-| `codex --account alice@example.com exec "Review this repository"` | Use an account for one launch without changing the saved selection. |
-| `codex add account --device-auth` | Sign in using the official device-code flow. |
-| `codex list accounts --refresh` | Refresh cached email and plan metadata. |
-| `codex list accounts --json` | Read structured account metadata, including IDs and home paths. |
-| `codex remove account` | Pick an account to remove from the list. |
-| `codex remove account alice@example.com` | Remove an email directly. |
-| `codex share data` | Migrate and share existing local data across every saved account now. |
+| `gemini select account alice@example.com` | Select an email directly and start Gemini. |
+| `gemini select account 2` | Select a number from the displayed list and start Gemini. |
+| `gemini select account --no-run` | Select an account without starting Gemini. |
+| `gemini current account` | Show the selected email. |
+| `gemini --account alice@example.com [ARGS]` | Use an account for one launch without changing the saved selection. |
+| `gemini list accounts --refresh` | Refresh cached email and plan metadata. |
+| `gemini list accounts --json` | Read structured account metadata, including IDs and home paths. |
+| `gemini remove account` | Pick an account to remove from the list. |
+| `gemini remove account alice@example.com` | Remove an email directly. |
+| `gemini share data` | Migrate and share existing local data across every saved account now. |
 
 Multiple saved logins can have the same email, including accounts with different
 workspace contexts. They remain separate; use the numbered picker when an email
@@ -82,53 +81,36 @@ matches more than one row.
 
 Removing an account unregisters it and clears the selection if it was active.
 Its home, session history, and credentials are retained. To explicitly sign out,
-run `codex --account EMAIL logout` before removing it. If Codex requests
-reauthentication later, `codex --account EMAIL login` updates that saved login
+run `gemini --account EMAIL logout` before removing it. If Gemini requests
+reauthentication later, `gemini --account EMAIL login` updates that saved login
 and refreshes its displayed email.
 
-To recover an already signed-in home, `codex add account --home /path/to/home`
+To recover an already signed-in home, `gemini add account --home /path/to/home`
 discovers its email without copying credentials or starting another sign-in.
 
 ## Installation
 
-This is a companion to the official Codex CLI. It does not include the Codex
+This is a companion to the official Google Gemini CLI. It does not include the Gemini
 runtime and it does not replace the official executable. Install Python 3.11+
-and the official Codex CLI first, then install this checkout with `uv`.
+and the official Gemini CLI first, then install this checkout.
 
-### 1. Install the official Codex CLI
+### 1. Install the official Gemini CLI
 
-On macOS or Linux, the official standalone installer is:
-
-```bash
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
-```
-
-On any platform with Node.js, the npm installation is:
+Via npm:
 
 ```bash
-npm install -g @openai/codex
+npm install -g @google/gemini-cli
 ```
 
-Confirm that the official command works before installing this package:
+Or via your package manager of choice. Confirm that the official command works before installing this package:
 
 ```text
-codex --version
+gemini --version
 ```
-
-See the [official Codex CLI setup guide](https://learn.chatgpt.com/docs/codex/cli)
-for the current supported installation options.
 
 ### 2. Install this checkout
 
-If `uv` is not installed, install it first.
-
-Linux and macOS:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Windows (PowerShell or Command Prompt):
+With `pip`:
 
 ```powershell
 pip install -e .
@@ -140,45 +122,44 @@ Or with `uv`:
 uv tool install --editable .
 ```
 
-Open a new terminal after installation. `codex` and `codex-accounts` are placed
+Open a new terminal after installation. `gemini` and `gemini-accounts` are placed
 directly in your PATH and are immediately available in any directory in both
-PowerShell and Command Prompt (CMD).
+PowerShell and Command Prompt (CMD), as well as Linux and macOS shells.
 
-### 3. Enable the `codex` wrapper
+### 3. Enable the `gemini` wrapper
 
 On **Windows (Command Prompt & PowerShell)**:
-No shell configuration is required. The `codex` command is globally installed
-and automatically detects the official Codex executable (whether installed via
-the OpenAI Windows installer or npm) and routes account management commands
+No shell configuration is required. The `gemini` command is globally installed
+and automatically detects the official Gemini executable and routes account management commands
 seamlessly from any directory.
 
 If you prefer to define an explicit PowerShell function in `$PROFILE`, run:
 
 ```powershell
-codex-accounts shell-init powershell | Out-File -Append $PROFILE
+gemini-accounts shell-init powershell | Out-File -Append $PROFILE
 ```
 
 For Command Prompt (`cmd.exe`), you can generate a doskey macro with:
 
 ```cmd
-codex-accounts shell-init cmd
+gemini-accounts shell-init cmd
 ```
 
 On **Bash**, enable it in the current terminal with:
 
 ```bash
-eval "$(codex-accounts shell-init bash)"
+eval "$(gemini-accounts shell-init bash)"
 ```
 
 To enable it in future Bash terminals, add that same `eval` line once to
 `~/.bashrc`, then run `source ~/.bashrc`. On **Zsh**, use the matching commands:
 
 ```zsh
-eval "$(codex-accounts shell-init zsh)"
+eval "$(gemini-accounts shell-init zsh)"
 ```
 
 Add the Zsh line to `~/.zshrc` for persistence. The generated function keeps
-the official Codex executable as the backend and routes account-management
+the official Gemini executable as the backend and routes account-management
 commands through this package.
 
 ### 4. Add and select accounts
@@ -186,14 +167,14 @@ commands through this package.
 After installation, the commands are the same on all platforms and in all shells:
 
 ```text
-codex add account
-codex add account
-codex list accounts
-codex select account
+gemini add account
+gemini add account
+gemini list accounts
+gemini select account
 ```
 
-Each `add account` login is saved in its own Codex home. `select account`
-saves the selection and starts Codex with that account; it never logs out another
+Each `add account` login is saved in its own Gemini home. `select account`
+saves the selection and starts Gemini with that account; it never logs out another
 saved account. Use **Up/Down** or **j/k**, then **Enter** to select; numbered
 input is also supported as a fallback. On Windows, NTFS junctions and hard links
 are used automatically, so Developer Mode is not required.
@@ -203,162 +184,117 @@ are used automatically, so Developer Mode is not required.
 From the checkout, refresh the editable installation with:
 
 ```text
+pip install -e .
+```
+
+Or with `uv`:
+
+```text
 uv tool install --editable . --force
 ```
 
 Remove this package with:
 
 ```text
-uv tool uninstall codex-accounts
+pip uninstall gemini-accounts
 ```
 
-The official Codex CLI is a separate installation and must be updated or
+Or with `uv`:
+
+```text
+uv tool uninstall gemini-accounts
+```
+
+The official Gemini CLI is a separate installation and must be updated or
 removed separately.
 
 ## Shared data and separate credentials
 
-Each saved login has a stable, separate `CODEX_HOME` for credentials. All accounts
-share the existing data at `~/.codex`: settings (`config.toml`), skills, plugins,
-instructions (`AGENTS.md`), rules, prompts, agents, automations, memories, caches,
-and history. Switching accounts changes the login while keeping your setup.
-Selecting an account chooses the login used for both new and resumed chats.
-Use `--no-run` to select before resuming an existing chat:
+Each saved login has a stable, separate home directory for credentials (`GEMINI_CLI_HOME` / `GEMINI_CONFIG_DIR`).
+All accounts share the existing data: settings (`settings.json`), MCP configurations (`mcp_config.json`),
+skills, extensions, commands, tools, agents, and history. Switching accounts changes the login while keeping your setup.
+Selecting an account chooses the login used for both new and resumed sessions.
+Use `--no-run` to select before resuming an existing session:
 
 ```sh
-codex select account alice@example.com --no-run
-codex resume
-codex resume SESSION_ID
+gemini select account alice@example.com --no-run
+gemini resume
 ```
 
-No environment override is required. The wrapper sets `CODEX_SQLITE_HOME` to the
-shared store and links each account's session directories, history indexes, and
-thread writer locks to it, along with its other persistent files and directories.
-The existing `~/.codex` store stays in place. Its
+No manual environment override is required. The wrapper manages account-specific homes
+and links each account's session directories, skills, extensions, tools, commands, and
+settings to the shared store. The existing default store stays in place. Its
 credentials are used only when that login is explicitly selected.
 
 Sharing is prepared when adding a new login, selecting an account, or launching
-Codex. To apply it to all existing accounts immediately, without starting a chat:
+Gemini. To apply it to all existing accounts immediately, without starting a chat:
 
 ```sh
-codex share data
+gemini share data
 ```
 
-Existing custom skills and plugins from all registered homes are combined.
+Existing custom skills and extensions from all registered homes are combined.
 Existing shared files take precedence when the same path has different content.
-Missing configuration keys, project settings, profiles, and skill entries are
-merged into the shared configuration; its existing values take precedence.
-Configuration is rewritten only when missing settings must be imported; its
-original formatting and comments are kept in the backup.
+Missing configuration keys in `settings.json` and `mcp_config.json` are merged
+into the shared configuration; its existing values take precedence.
 
 Original account files are retained under
 `<account-home>/.shared-backups/<migration-id>/account/`. Shared configuration
 files changed by the merge are backed up alongside them under `shared/`.
 The migration prints each backup location. No credential files are copied.
 Directory links make later skill installations and edits visible to all
-accounts immediately. Additional top-level files introduced by Codex are
-discovered on subsequent launches or with `codex share data`. If an external
-editor replaces a file link, the next preparation repairs it, keeping the
-newer file and retaining the other copy in the backup.
+accounts immediately.
 
-Credential files (`auth.json`, `.credentials.json`), the `secrets` directory,
-credential backups, and OS keyring entries remain specific to each login.
-Temporary process files, locks, and recovery copies also stay local; old SQLite
-files are retained for recovery while live databases use `CODEX_SQLITE_HOME`.
-Sharing local plugin files does not transfer a remote account's authorizations.
-Restart existing Codex sessions to reload the shared skills and configuration.
-Codex's [official credential storage documentation](https://learn.chatgpt.com/docs/auth#credential-storage)
-describes its file and keyring backends.
+Credential files (`google_accounts.json`, `oauth_creds.json`, `credentials.json`,
+`tokens.json`, `auth.json`), the `secrets` directory, credential backups, and OS
+keyring entries remain specific to each login.
 
-Account-specific history also joins the shared store. Original history files
-are retained in `.history-backups` inside the account home; original account
-databases remain in place. Shared databases modified by an import are backed up
-under the account manager's `history-backups` directory using SQLite's backup
-API, including committed WAL data. Existing shared threads take precedence.
-Threads, paginated history, goals, queued messages, and thread memory records
-are imported; account-specific enrollments and old logs stay in their original
-stores. Future SQLite data, including logs, goals, and memories, is shared.
-
-Finish and exit running chats before the first launch with this version. A busy
-account's migration is deferred until its chats close; launching that account
-before migration is complete reports an actionable error. Normal launches after
-migration do not require other chats to close. The original account databases
-and file backups are retained for recovery and should not be used for parallel
-sessions after migration.
+Restart existing Gemini sessions to reload the shared skills and configuration.
 
 The shared location is recorded in `history.json` beside the account registry
 and is reused for settings and skills as well.
-For a custom location, set `CODEX_ACCOUNTS_HISTORY_HOME` before the first launch;
-later launches keep the recorded location. Symbolic links are required; Windows
-users must enable Developer Mode or run with permission to create them.
+For a custom location, set `GEMINI_ACCOUNTS_HISTORY_HOME` before the first launch;
+later launches keep the recorded location.
 
 The manager does not import the original default login automatically. If no
-account is selected, an interactive Codex launch opens the picker; scripts must
+account is selected, an interactive Gemini launch opens the picker; scripts must
 select an account with `--no-run` or supply `--account EMAIL`. Empty registries ask
 you to add an account. Quota errors never cause automatic switching or retries.
 
-Email discovery uses Codex's local stdio `account/read` API with
-`refreshToken: false`. It reads metadata, starts no conversations, and submits
-no model requests. Codex's credential backend handles both file and keyring
-storage. The manager never reads, copies, or parses raw tokens. The
-[official account API documentation](https://learn.chatgpt.com/docs/app-server)
-describes this interface and its nullable email field.
-
-The selection picker also uses `account/rateLimits/read` to retrieve live quota
-metadata through the same official interface. These lookups submit no model
-requests. Quotas are kept only for the current picker, so cached account lists
-and the registry do not retain stale usage figures.
+Email discovery reads account information from Gemini CLI's native files
+(`google_accounts.json` and decoded ID tokens in `oauth_creds.json`) instantaneously
+without running heavy background processes or submitting model requests. It also
+supports app-server protocol querying as a fallback.
 
 Only home paths, emails, plan metadata, and the chosen account ID enter the
-registry. On Linux it lives in `~/.local/share/codex-accounts/accounts.json`,
+registry. On Linux it lives in `~/.local/share/gemini-accounts/accounts.json`,
 respecting `XDG_DATA_HOME`. New homes are under `homes/<internal-id>/`.
-On macOS the default root is `~/Library/Application Support/codex-accounts`;
-on Windows it is `%LOCALAPPDATA%/codex-accounts`.
+On macOS the default root is `~/Library/Application Support/gemini-accounts`;
+on Windows it is `%LOCALAPPDATA%/gemini-accounts`.
 
 Registry changes are locked and written atomically. Created directories use mode
 `0700` and registry files `0600` on POSIX. A successful login remains saved
 if email lookup temporarily fails; use `list accounts --refresh` to retry.
-Accounts whose provider supplies no email are shown as “Email unavailable”.
 
-Named environment credentials (`OPENAI_API_KEY`, `CODEX_API_KEY`, and
-`CODEX_ACCESS_TOKEN`) are omitted from account launches so they cannot override
-the chosen saved login. Each home's configuration and explicit provider flags
-still apply. A remote Codex server manages its own authentication.
+Named environment credentials (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, and
+`GOOGLE_APPLICATION_CREDENTIALS`) are omitted from account launches so they cannot override
+the chosen saved login.
 
 | Setting | Purpose |
 | --- | --- |
-| `CODEX_ACCOUNTS_HOME` | Override the registry and managed-home root. |
-| `CODEX_ACCOUNTS_CODEX_BIN` | Set the official Codex executable; otherwise use `codex` on `PATH`. |
-
-Old registries migrate to the email-based schema when updated. A private backup
-is saved before migration, and existing home paths remain stable. Nicknames are
-discarded.
+| `GEMINI_ACCOUNTS_HOME` | Override the registry and managed-home root. |
+| `GEMINI_ACCOUNTS_GEMINI_BIN` | Set the official Gemini executable; otherwise use `gemini` on `PATH`. |
+| `GEMINI_ACCOUNTS_HISTORY_HOME` | Override shared history and settings location. |
 
 ## Development
 
 ```bash
-PYTHONPATH=. python3 -m unittest discover -s tests -v
-uvx ruff check .
-uvx ruff format --check .
+python -m unittest discover -s tests -v
 ```
 
-The integration suite uses a temporary fake Codex process with the actual
-initialize/account-read protocol shape. It exercises repeated sign-ins, email
-discovery, cached lists, token-refresh isolation, registry migration, concurrent
-selection, failure recovery, shell forwarding, and manual handling of quota
-errors. Real PTY tests cover arrow keys, cancellation, and terminal restoration.
-The native metadata protocol is also smoke-tested with the installed Codex CLI.
+The test suite covers repeated sign-ins, email discovery, cached lists,
+credential isolation, registry migration, concurrent selection, failure recovery,
+shell forwarding, and manual handling of quota errors. Real PTY tests cover arrow
+keys, cancellation, and terminal restoration.
 
-The tests never sign into real accounts. Browser sign-in remains an interactive
-action for the account owner. Native PTY integration tests run on POSIX, while
-portable account-state, parser, and numbered-picker tests run on every platform.
-
-GitHub Actions runs the test, parser, lint, formatting, and wheel checks on
-Ubuntu, macOS, and Windows.
-
-Verified with Codex CLI `0.154.0` and upstream source commit
-`1715e55076737158ba61d43158ede504de6d4ce1`.
-
-Implementation references:
-[account protocol](https://github.com/openai/codex/blob/1715e55076737158ba61d43158ede504de6d4ce1/codex-rs/app-server-protocol/src/protocol/v2/account.rs),
-[login flow](https://github.com/openai/codex/blob/1715e55076737158ba61d43158ede504de6d4ce1/codex-rs/cli/src/login.rs),
-[credential storage](https://github.com/openai/codex/blob/1715e55076737158ba61d43158ede504de6d4ce1/codex-rs/login/src/auth/storage.rs).
+GitHub Actions runs the test, parser, and wheel checks on Ubuntu, macOS, and Windows.

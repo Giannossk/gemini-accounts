@@ -6,23 +6,29 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_accounts.history import create_link, is_junction, is_link, remove_link, _linked
-from codex_accounts.native import codex_binary, _is_wrapper
-from codex_accounts.cli import run
+from gemini_accounts.history import create_link, is_junction, is_link, remove_link, _linked
+from gemini_accounts.native import gemini_binary, _is_wrapper
+from gemini_accounts.cli import run
 
 
 class WindowsIntegrationTests(unittest.TestCase):
-    def test_codex_binary_finds_official_cli(self):
-        binary = codex_binary()
-        self.assertTrue(Path(binary).is_file())
-        self.assertFalse(_is_wrapper(Path(binary)))
-        self.assertIn("codex", Path(binary).name.lower())
+    def test_gemini_binary_finds_official_cli(self):
+        try:
+            binary = gemini_binary()
+            self.assertTrue(Path(binary).is_file())
+            self.assertFalse(_is_wrapper(Path(binary)))
+            self.assertTrue(any(name in Path(binary).name.lower() for name in ("gemini", "agy")))
+        except Exception as e:
+            if "Install Gemini CLI" in str(e):
+                self.skipTest("No official Gemini CLI binary on system")
+            raise
 
     def test_is_wrapper_identifies_current_scripts(self):
         py_scripts = Path(sys.executable).parent / "Scripts"
-        codex_script = py_scripts / "codex.exe"
-        if codex_script.exists():
-            self.assertTrue(_is_wrapper(codex_script))
+        for stem in ("gemini.exe", "gemini-accounts.exe", "codex.exe"):
+            script = py_scripts / stem
+            if script.exists():
+                self.assertTrue(_is_wrapper(script))
 
     def test_junction_and_hardlink_creation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -53,13 +59,14 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertTrue(target_file.exists())
 
     def test_shell_init_powershell(self):
-        with patch("sys.stdout.write") as mock_write, patch("builtins.print") as mock_print:
+        with patch("gemini_accounts.cli.gemini_binary", return_value="gemini.exe"), \
+             patch("builtins.print") as mock_print:
             code = run(["shell-init", "powershell"])
             self.assertEqual(code, 0)
             mock_print.assert_called()
             output = mock_print.call_args[0][0]
-            self.assertIn("function codex {", output)
-            self.assertIn("CODEX_ACCOUNTS_CODEX_BIN", output)
+            self.assertIn("function gemini {", output)
+            self.assertIn("GEMINI_ACCOUNTS_GEMINI_BIN", output)
 
     def test_shell_init_cmd(self):
         with patch("builtins.print") as mock_print:
@@ -67,10 +74,10 @@ class WindowsIntegrationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             mock_print.assert_called()
             output = mock_print.call_args[0][0]
-            self.assertIn("doskey codex=", output)
+            self.assertIn("doskey gemini=", output)
 
     def test_private_directory_preserves_inheritance(self):
-        from codex_accounts.state import private_directory
+        from gemini_accounts.state import private_directory
         with tempfile.TemporaryDirectory() as temp_dir:
             target_dir = Path(temp_dir) / "test_private"
             private_directory(target_dir)
@@ -78,3 +85,7 @@ class WindowsIntegrationTests(unittest.TestCase):
             test_file = target_dir / "test.txt"
             test_file.write_text("ok", encoding="utf-8")
             self.assertEqual(test_file.read_text(encoding="utf-8"), "ok")
+
+
+if __name__ == "__main__":
+    unittest.main()

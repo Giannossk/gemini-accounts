@@ -1,4 +1,4 @@
-"""Private registry of email identities and stable Codex homes."""
+"""Private registry of email identities and stable Gemini homes."""
 
 import json
 import os
@@ -23,7 +23,7 @@ def private_directory(path: Path) -> None:
 
 
 def default_root() -> Path:
-    if custom := os.environ.get("CODEX_ACCOUNTS_HOME"):
+    if custom := os.environ.get("GEMINI_ACCOUNTS_HOME") or os.environ.get("CODEX_ACCOUNTS_HOME"):
         return Path(custom).expanduser().resolve()
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
@@ -33,7 +33,7 @@ def default_root() -> Path:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
         if not base.is_absolute():
             base = Path.home() / ".local/share"
-    return (base / "codex-accounts").resolve()
+    return (base / "gemini-accounts").resolve()
 
 
 def safe_text(value: object, *, limit: int = 320) -> bool:
@@ -196,7 +196,7 @@ class Store:
             return matches[0]
         if len(matches) > 1:
             raise AccountError(
-                "That email has multiple saved logins. Choose one with codex select account."
+                "That email has multiple saved logins. Choose one with gemini select account."
             )
         if (
             selector.isascii()
@@ -204,14 +204,14 @@ class Store:
             and 0 < int(selector) <= len(state["accounts"])
         ):
             return self.rows(state)[int(selector) - 1][0]
-        raise AccountError("Account not found. Run codex list accounts.")
+        raise AccountError("Account not found. Run gemini list accounts.")
 
     def home(self, account_id: str, state: dict | None = None) -> Path:
         state = self.read() if state is None else state
         record = state["accounts"].get(account_id)
         if record is None:
             raise AccountError(
-                "That account was removed. Run codex select account again."
+                "That account was removed. Run gemini select account again."
             )
         home = Path(record["home"])
         if not home.is_dir():

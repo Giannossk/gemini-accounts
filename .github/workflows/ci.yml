@@ -44,7 +44,7 @@ jobs:
 
       - name: Verify the portable CLI parser
         run: >-
-          python -c "from codex_accounts.cli import parser; args = parser().parse_args(['select', 'account']); assert args.command == 'select' and args.subject == 'account'"
+          python -c "from gemini_accounts.cli import parser; args = parser().parse_args(['select', 'account']); assert args.command == 'select' and args.subject == 'account'"
 
       - name: Check lint
         run: python -m ruff check .

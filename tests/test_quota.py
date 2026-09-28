@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from codex_accounts.manager import describe_quota, quota_labels
-from codex_accounts.state import AccountError
+from gemini_accounts.manager import describe_quota, quota_labels
+from gemini_accounts.state import AccountError
 
 
 class QuotaTests(unittest.TestCase):
@@ -27,9 +27,9 @@ class QuotaTests(unittest.TestCase):
             "5h: 95% left | weekly: 40% left",
         )
 
-    def test_codex_bucket_takes_precedence_over_other_model_limits(self):
+    def test_gemini_bucket_takes_precedence_over_other_model_limits(self):
         other = {
-            "limitId": "codex_other",
+            "limitId": "gemini_other",
             "primary": {"usedPercent": 10, "windowDurationMins": 300},
         }
         self.assertEqual(
@@ -37,8 +37,8 @@ class QuotaTests(unittest.TestCase):
                 {
                     "rateLimits": other,
                     "rateLimitsByLimitId": {
-                        "codex_other": other,
-                        "codex": {
+                        "gemini_other": other,
+                        "gemini": {
                             "primary": {"usedPercent": 80, "windowDurationMins": 300}
                         },
                     },
@@ -106,12 +106,12 @@ class QuotaTests(unittest.TestCase):
             for number in range(9):
                 home = Path(temporary) / str(number)
                 home.mkdir()
-                accounts[str(number)] = {"home": str(home), "kind": "chatgpt"}
+                accounts[str(number)] = {"home": str(home), "kind": "google"}
             active = peak = 0
 
             async def lookup(binary, home):
                 nonlocal active, peak
-                self.assertEqual(binary, "codex-fixture")
+                self.assertEqual(binary, "gemini-fixture")
                 active += 1
                 peak = max(peak, active)
                 try:
@@ -131,9 +131,9 @@ class QuotaTests(unittest.TestCase):
 
             with (
                 patch(
-                    "codex_accounts.manager.codex_binary", return_value="codex-fixture"
+                    "gemini_accounts.manager.gemini_binary", return_value="gemini-fixture"
                 ),
-                patch("codex_accounts.manager.read_rate_limits", side_effect=lookup),
+                patch("gemini_accounts.manager.read_rate_limits", side_effect=lookup),
             ):
                 labels = quota_labels(accounts)
 
@@ -153,15 +153,15 @@ class QuotaTests(unittest.TestCase):
                 "api-key": {"home": temporary, "kind": "apiKey"},
                 "missing": {
                     "home": str(Path(temporary) / "missing"),
-                    "kind": "chatgpt",
+                    "kind": "google",
                 },
             }
             with (
                 patch(
-                    "codex_accounts.manager.codex_binary", return_value="codex-fixture"
+                    "gemini_accounts.manager.gemini_binary", return_value="gemini-fixture"
                 ),
                 patch(
-                    "codex_accounts.manager.read_rate_limits", new_callable=AsyncMock
+                    "gemini_accounts.manager.read_rate_limits", new_callable=AsyncMock
                 ) as lookup,
             ):
                 labels = quota_labels(accounts)
@@ -174,5 +174,49 @@ class QuotaTests(unittest.TestCase):
             )
 
 
+    def test_gemini_groups_and_buckets_describe_quota(self):
+        gemini_summary = {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"window": "5h", "remainingFraction": 0.65},
+                        {"window": "weekly", "remainingFraction": 0.94},
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(gemini_summary),
+            "5h: 65% left | weekly: 94% left",
+        )
+
+    def test_list_accounts_with_show_quota(self):
+        import io
+        from unittest.mock import MagicMock
+        from gemini_accounts.manager import list_accounts
+
+        store = MagicMock()
+        state = {
+            "selected": "acc1",
+            "accounts": {
+                "acc1": {"email": "user1@example.com", "home": "/tmp/1", "kind": "google"},
+            },
+        }
+        store.read.return_value = state
+        store.rows.return_value = [("acc1", state["accounts"]["acc1"])]
+
+        with (
+            patch("gemini_accounts.manager.refresh", return_value=state),
+            patch("gemini_accounts.manager.quota_labels", return_value={"acc1": "5h: 80% left | weekly: 90% left"}),
+            patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            list_accounts(store, show_quota=True)
+            output = out.getvalue()
+            self.assertIn("5h: 80% left | weekly: 90% left", output)
+            self.assertIn("user1@example.com", output)
+
+
 if __name__ == "__main__":
     unittest.main()
+

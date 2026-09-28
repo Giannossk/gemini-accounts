@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_accounts.history import MARKER, HistoryBusy, prepare_history
-from codex_accounts.state import AccountError, Store, file_lock
+from gemini_accounts.history import MARKER, HistoryBusy, prepare_history, _insert_rows
+from gemini_accounts.state import AccountError, Store, file_lock
 
 
 @unittest.skipUnless(os.name == "posix", "Migration requires symbolic links")
@@ -25,13 +25,16 @@ class HistoryTests(unittest.TestCase):
             state["accounts"]["a"] = {
                 "home": str(self.account),
                 "email": "alice@example.com",
-                "plan": "plus",
-                "kind": "chatgpt",
+                "plan": "google",
+                "kind": "google",
             }
             state["selected"] = "a"
         self.addCleanup(patch.stopall)
         patch.dict(
-            os.environ, {"CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared)}
+            os.environ, {
+                "GEMINI_ACCOUNTS_HISTORY_HOME": str(self.shared),
+                "CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared),
+            }
         ).start()
         self.databases = []
         self.addCleanup(lambda: [db.close() for db in self.databases])
@@ -242,7 +245,7 @@ class HistoryTests(unittest.TestCase):
             )
 
     def test_interrupted_import_retries_without_duplicates_or_partial_thread(self):
-        from codex_accounts.history import _insert_rows
+        from gemini_accounts.history import _insert_rows
 
         self.state_database(self.shared, "old")
         self.state_database(self.account, "new")
@@ -259,7 +262,7 @@ class HistoryTests(unittest.TestCase):
             return _insert_rows(db, table, rows)
 
         with patch(
-            "codex_accounts.history._insert_rows", side_effect=fail_before_publication
+            "gemini_accounts.history._insert_rows", side_effect=fail_before_publication
         ):
             with self.assertRaisesRegex(AccountError, "simulated"):
                 prepare_history(self.store, self.account)
@@ -289,12 +292,17 @@ class HistoryTests(unittest.TestCase):
         with (
             patch.dict(
                 os.environ,
-                {"CODEX_ACCOUNTS_HISTORY_HOME": "", "CODEX_HOME": str(self.account)},
+                {
+                    "GEMINI_ACCOUNTS_HISTORY_HOME": "",
+                    "CODEX_ACCOUNTS_HISTORY_HOME": "",
+                    "GEMINI_CLI_HOME": str(self.account),
+                    "CODEX_HOME": str(self.account),
+                },
             ),
             patch("pathlib.Path.home", return_value=self.root),
         ):
             self.assertEqual(
-                prepare_history(self.store, self.account), self.root / ".codex"
+                prepare_history(self.store, self.account), self.root / ".gemini"
             )
 
 

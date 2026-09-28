@@ -1,4 +1,4 @@
-"""Share local history while keeping each login in its original Codex home."""
+"""Share local history while keeping each login in its original Gemini home."""
 
 import filecmp
 import json
@@ -12,10 +12,10 @@ from pathlib import Path
 
 from .state import AccountError, Store, file_lock, private_directory
 
-MARKER = ".codex-accounts-history"
-DIRECTORIES = ("sessions", "archived_sessions", "thread-writer-locks")
-FILES = ("history.jsonl", "session_index.jsonl")
-DATABASE_PREFIXES = ("thread_history_", "goals_", "queue_", "memories_", "state_")
+MARKER = ".gemini-accounts-history"
+DIRECTORIES = ("sessions", "archived_sessions", "thread-writer-locks", "history", "conversations")
+FILES = ("history.jsonl", "session_index.jsonl", "conversation_summaries.db")
+DATABASE_PREFIXES = ("thread_history_", "goals_", "queue_", "memories_", "state_", "conversation_")
 
 
 class HistoryBusy(AccountError):
@@ -37,12 +37,12 @@ def configured_history(account_home: Path) -> Path | None:
 def history_home(store: Store) -> Path:
     """Pin the existing default store; never derive history from the selected login."""
     path = store.root / "history.json"
-    requested = os.environ.get("CODEX_ACCOUNTS_HISTORY_HOME")
+    requested = os.environ.get("GEMINI_ACCOUNTS_HISTORY_HOME") or os.environ.get("CODEX_ACCOUNTS_HISTORY_HOME")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         target = (
-            Path(requested).expanduser() if requested else Path.home() / ".codex"
+            Path(requested).expanduser() if requested else Path.home() / ".gemini"
         ).resolve()
         private_directory(target)
         _write_json(path, {"version": 1, "home": str(target)})
@@ -144,7 +144,7 @@ def _idle(account_home: Path, stack: ExitStack) -> None:
                 stack.enter_context(file_lock(path, blocking=False))
     except AccountError as error:
         raise HistoryBusy(
-            f"Close running Codex sessions in {account_home} before joining shared history."
+            f"Close running Gemini sessions in {account_home} before joining shared history."
         ) from error
 
 

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_accounts.cli import parser
-from codex_accounts.picker import pick
-from codex_accounts.state import Store
+from gemini_accounts.cli import parser
+from gemini_accounts.picker import pick
+from gemini_accounts.state import Store
 
 
 class PortableTests(unittest.TestCase):
@@ -42,8 +42,8 @@ class PortableTests(unittest.TestCase):
                 state["accounts"]["account-1"] = {
                     "home": str(home),
                     "email": "account@example.com",
-                    "plan": "pro",
-                    "kind": "chatgpt",
+                    "plan": "google",
+                    "kind": "google",
                 }
                 state["selected"] = "account-1"
 
