@@ -581,8 +581,8 @@ def _fetch_live_quota(home: Path, timeout: float = 5) -> dict | None:
 
     def _request_quota(access_token: str):
         for host in (
-            "https://daily-cloudcode-pa.googleapis.com",
             "https://cloudcode-pa.googleapis.com",
+            "https://daily-cloudcode-pa.googleapis.com",
         ):
             url = f"{host}/v1internal:retrieveUserQuotaSummary"
             req = urllib.request.Request(
@@ -597,7 +597,9 @@ def _fetch_live_quota(home: Path, timeout: float = 5) -> dict | None:
             )
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if isinstance(data, dict):
+                        return data
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     return "UNAUTHORIZED"

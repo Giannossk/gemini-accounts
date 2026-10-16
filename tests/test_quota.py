@@ -191,6 +191,108 @@ class QuotaTests(unittest.TestCase):
             "5h: 65% left | weekly: 94% left",
         )
 
+    def test_gemini_models_group_takes_priority_over_other_groups(self):
+        summary = {
+            "groups": [
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1.0},
+                        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1.0},
+                    ],
+                },
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1.0},
+                        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.8058},
+                    ],
+                },
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 100% left | weekly: 81% left",
+        )
+
+    def test_quota_fraction_edge_clamping(self):
+        summary_almost_full = {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"window": "5h", "remainingFraction": 0.999},
+                        {"window": "weekly", "remainingFraction": 0.001},
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary_almost_full),
+            "5h: 99% left | weekly: 1% left",
+        )
+
+        summary_exact = {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"window": "5h", "remainingFraction": 1.0},
+                        {"window": "weekly", "remainingFraction": 0.0},
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary_exact),
+            "5h: 100% left | weekly: 0% left",
+        )
+
+    def test_bucket_id_fallback_when_window_missing(self):
+        summary = {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"bucketId": "gemini-5h", "remainingFraction": 0.5},
+                        {"bucketId": "gemini-weekly", "remainingFraction": 0.75},
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 50% left | weekly: 75% left",
+        )
+
+    def test_fetch_live_quota_queries_production_first(self):
+        import io
+        from gemini_accounts.native import _fetch_live_quota
+
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            tok_file = home / "keyring_token.json"
+            tok_file.write_text(
+                '{"token": {"access_token": "mock_token"}}', encoding="utf-8"
+            )
+
+            requested_urls = []
+
+            def fake_urlopen(req, timeout=5):
+                requested_urls.append(req.full_url)
+                resp = io.BytesIO(b'{"groups": [{"displayName": "Gemini Models", "buckets": []}]}')
+                resp.read = resp.getvalue
+                return io.BytesIO(b'{"groups": [{"displayName": "Gemini Models", "buckets": []}]}')
+
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                result = _fetch_live_quota(home)
+                self.assertIsNotNone(result)
+                self.assertEqual(
+                    requested_urls[0],
+                    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+                )
+
+
     def test_list_accounts_with_show_quota(self):
         import io
         from unittest.mock import MagicMock
@@ -219,4 +321,5 @@ class QuotaTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

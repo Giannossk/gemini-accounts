@@ -42,7 +42,20 @@ def describe_quota(result: dict | None) -> str:
         if isinstance(groups, list):
             gemini_group = None
             for g in groups:
-                if isinstance(g, dict) and "gemini" in g.get("displayName", "").lower():
+                if not isinstance(g, dict):
+                    continue
+                name = (g.get("displayName") or "").lower()
+                desc = (g.get("description") or "").lower()
+                gid = (g.get("groupId") or "").lower()
+                if "gemini" in name or "gemini" in desc or "gemini" in gid:
+                    gemini_group = g
+                    break
+                buckets = g.get("buckets", [])
+                if isinstance(buckets, list) and any(
+                    "gemini" in str(b.get("bucketId", "")).lower()
+                    for b in buckets
+                    if isinstance(b, dict)
+                ):
                     gemini_group = g
                     break
             if not gemini_group and groups and isinstance(groups[0], dict):
@@ -51,13 +64,18 @@ def describe_quota(result: dict | None) -> str:
                 for b in gemini_group.get("buckets", []):
                     if not isinstance(b, dict):
                         continue
-                    w = b.get("window")
+                    w = str(b.get("window") or b.get("bucketId") or "").lower()
                     frac = b.get("remainingFraction")
                     if frac is not None and isinstance(frac, (int, float)):
-                        pct = max(0, min(100, int(round(frac * 100))))
-                        if w == "5h":
+                        pct = int(round(frac * 100))
+                        if frac < 1.0 and pct == 100:
+                            pct = 99
+                        elif frac > 0.0 and pct == 0:
+                            pct = 1
+                        pct = max(0, min(100, pct))
+                        if "5h" in w:
                             remaining[300] = pct
-                        elif w == "weekly":
+                        elif "week" in w:
                             remaining[10080] = pct
 
         limits = result.get("rateLimits")
