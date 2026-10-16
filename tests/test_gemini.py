@@ -213,5 +213,29 @@ class GeminiAccountsTests(unittest.TestCase):
         self.assertEqual(state["selected"], list(state["accounts"].keys())[0])
 
 
+    def test_import_legacy_history(self):
+        from gemini_accounts.history import _import_legacy_history
+        legacy = self.root / "legacy_codex"
+        legacy.mkdir()
+        (legacy / "sessions").mkdir()
+        (legacy / "sessions" / "session1.jsonl").write_text('{"turn": 1}\n', encoding="utf-8")
+        (legacy / "history.jsonl").write_text('{"text": "cmd1"}\n', encoding="utf-8")
+        (legacy / "session_index.jsonl").write_text('{"id": "s1"}\n', encoding="utf-8")
+
+        target = self.root / "target_gemini"
+        target.mkdir()
+
+        _import_legacy_history(legacy, target, self.store)
+
+        self.assertTrue((target / "sessions" / "session1.jsonl").is_file())
+        self.assertEqual(
+            (target / "sessions" / "session1.jsonl").read_text(encoding="utf-8"),
+            '{"turn": 1}\n',
+        )
+        self.assertIn('{"text": "cmd1"}', (target / "history.jsonl").read_text(encoding="utf-8"))
+        self.assertIn('{"id": "s1"}', (target / "session_index.jsonl").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

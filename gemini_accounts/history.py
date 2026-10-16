@@ -344,13 +344,13 @@ def _copy_tree(source: Path, target: Path) -> None:
 
 def _merge_lines(source: Path, target: Path) -> None:
     # Codex uses file locking for prompt-history appends as well.
-    # msvcrt needs a byte to lock; use a valid blank JSONL line instead of the
-    # NUL byte the registry-lock helper uses for an empty lock file.
-    if os.name == "nt" and target.stat().st_size == 0:
+    # On Windows, msvcrt file locks conflict with secondary open handles on the same file.
+    lock_path = target if os.name != "nt" else target.with_name(f".{target.name}.lock")
+    if os.name != "nt" and target.exists() and target.stat().st_size == 0:
         with target.open("ab") as handle:
             handle.write(b"\n")
-    with file_lock(target):
-        existing = target.read_bytes()
+    with file_lock(lock_path):
+        existing = target.read_bytes() if target.exists() else b""
         seen = set(existing.splitlines())
         with target.open("ab") as handle:
             if existing and not existing.endswith(b"\n"):
@@ -432,10 +432,50 @@ def _join(account_home: Path, target: Path, store: Store) -> None:
         _write_json(account_home / MARKER, str(target))
 
 
+def _import_legacy_history(legacy: Path, target: Path, store: Store) -> None:
+    if not legacy.is_dir() or legacy.resolve() == target.resolve():
+        return
+    legacy_sessions = legacy / "sessions"
+    target_sessions = target / "sessions"
+    if legacy_sessions.is_dir():
+        private_directory(target_sessions)
+        for root, dirs, files in os.walk(legacy_sessions):
+            rel = Path(root).relative_to(legacy_sessions)
+            dest_dir = target_sessions / rel
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            for f in files:
+                dest = dest_dir / f
+                if not dest.exists():
+                    try:
+                        shutil.copy2(Path(root) / f, dest)
+                    except OSError:
+                        pass
+    for fname in ("history.jsonl", "session_index.jsonl"):
+        src = legacy / fname
+        dst = target / fname
+        if src.is_file():
+            if not dst.exists():
+                if os.name == "posix":
+                    dst.touch(mode=0o600)
+                else:
+                    dst.touch()
+            try:
+                _merge_lines(src, dst)
+            except Exception:
+                pass
+    try:
+        _import_databases(legacy, target, store.root / "history-backups" / uuid.uuid4().hex)
+    except Exception:
+        pass
+
+
 def prepare_history(store: Store, account_home: Path | None = None) -> Path:
     private_directory(store.root)
     with file_lock(store.root / "history.lock"):
         target = history_home(store)
+        legacy = Path.home() / ".codex"
+        if legacy.is_dir() and legacy.resolve() != target.resolve():
+            _import_legacy_history(legacy, target, store)
         candidates = {Path(row["home"]) for row in store.read()["accounts"].values()}
         if account_home is not None:
             candidates.add(account_home)
