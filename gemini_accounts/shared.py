@@ -40,6 +40,7 @@ DIRECTORIES = (
     "log",
     "history",
     "shell_snapshots",
+    "antigravity-cli",
 )
 
 

@@ -392,7 +392,7 @@ def account_environment(home: Path) -> dict[str, str]:
     if os.name != "nt":
         env["USERPROFILE"] = str(home)
     env["HOME"] = str(home)
-    app_data = home / "antigravity-cli" if (home / "antigravity-cli").is_dir() else gemini_dir / "antigravity-cli"
+    app_data = home / "antigravity-cli"
     env["ANTIGRAVITY_APP_DATA_DIR"] = str(app_data.resolve() if app_data.exists() else app_data)
     if shared_history := configured_history(home):
         env["GEMINI_HISTORY_HOME"] = str(shared_history)
