@@ -111,6 +111,14 @@ class GeminiAccountsTests(unittest.TestCase):
             self.assertNotIn("GOOGLE_API_KEY", env)
             self.assertNotIn("OPENAI_API_KEY", env)
 
+    def test_account_environment_resolves_antigravity_app_data_dir(self):
+        home = self.root / "acc_agy"
+        home.mkdir(parents=True)
+        agy_dir = home / "antigravity-cli"
+        agy_dir.mkdir()
+        env = account_environment(home)
+        self.assertEqual(env["ANTIGRAVITY_APP_DATA_DIR"], str(agy_dir.resolve()))
+
     def test_add_account_from_existing_home(self):
         existing = self.root / "existing_gemini"
         existing.mkdir(parents=True)

@@ -138,6 +138,44 @@ class SharedHomeTests(unittest.TestCase):
                 self.assertFalse((home / Path(name).parts[0]).is_symlink())
         self.assertFalse(list(self.homes[0].glob(".shared-backups/**/auth.json")))
 
+    def test_system_and_tool_directories_and_dotfolders_stay_local(self):
+        tool_names = (
+            ".cargo/bin/rustc",
+            ".rustup/settings.toml",
+            ".git/config",
+            "AppData/Local/test.txt",
+            "Desktop/desktop.ini",
+            "Music/desktop.ini",
+            "node_modules/package/index.js",
+        )
+        for home in [self.shared, *self.homes]:
+            for name in tool_names:
+                self.write(home, name, home.name)
+        prepare_home(self.store)
+        for home in self.homes:
+            for name in tool_names:
+                top = Path(name).parts[0]
+                self.assertFalse((home / top).is_symlink())
+                self.assertEqual((home / name).read_text(), home.name)
+
+    def test_stale_unshared_links_are_cleaned_up(self):
+        prepare_home(self.store)
+        # Simulate an old manifest containing a stale item like Desktop
+        old_marker = {
+            "version": 1,
+            "home": str(self.shared),
+            "names": ["Desktop", "config.toml", "settings.json", *DIRECTORIES],
+        }
+        (self.homes[0] / MARKER).write_text(json.dumps(old_marker), encoding="utf-8")
+        stale_dir = self.shared / "Desktop"
+        stale_dir.mkdir(exist_ok=True)
+        (self.homes[0] / "Desktop").symlink_to(stale_dir, target_is_directory=True)
+        self.assertTrue((self.homes[0] / "Desktop").is_symlink())
+
+        prepare_home(self.store)
+        self.assertFalse((self.homes[0] / "Desktop").exists())
+        self.assertTrue(stale_dir.exists())
+
     def test_conflicting_files_are_recoverable_and_repeated_launch_is_idempotent(self):
         self.write(self.shared, "skills/same/SKILL.md", "shared")
         self.write(self.homes[0], "skills/same/SKILL.md", "account")

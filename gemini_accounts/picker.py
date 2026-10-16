@@ -114,6 +114,10 @@ def pick(options: list[tuple[str, str]], *, selected: str | None = None) -> str 
                     key = "q"
                 elif ch in ("j", "k"):
                     key = ch
+                elif ch.isdigit() and 1 <= int(ch) <= len(options):
+                    index = int(ch) - 1
+                    draw()
+                    continue
                 else:
                     key = "ignore"
 
@@ -166,6 +170,11 @@ def pick(options: list[tuple[str, str]], *, selected: str | None = None) -> str 
             if key in (b"j", b"k"):
                 index = (index + (1 if key == b"j" else -1)) % len(options)
                 draw()
+            if key and key in b"123456789":
+                num = int(key.decode("ascii"))
+                if 1 <= num <= len(options):
+                    index = num - 1
+                    draw()
     except KeyboardInterrupt:
         pass
     finally:

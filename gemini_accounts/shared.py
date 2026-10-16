@@ -43,9 +43,46 @@ DIRECTORIES = (
 )
 
 
+IGNORED_SYSTEM_NAMES = {
+    "appdata",
+    "application data",
+    "local settings",
+    "desktop",
+    "documents",
+    "downloads",
+    "music",
+    "pictures",
+    "videos",
+    "saved games",
+    "searches",
+    "favorites",
+    "links",
+    "contacts",
+    "ntuser.dat",
+    "ntuser.ini",
+    "desktop.ini",
+    "thumbs.db",
+    "public",
+    "library",
+    "applications",
+    "node_modules",
+    "venv",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    "cargo",
+    "rustup",
+}
+
+
 def shareable(name: str) -> bool:
-    """Credentials, recovery copies, and process-local files stay in place."""
-    plain = name.lstrip(".").casefold()
+    """Credentials, recovery copies, process-local files, and OS directories stay in place."""
+    if name.startswith("."):
+        return False
+    plain = name.casefold()
+    if plain in IGNORED_SYSTEM_NAMES:
+        return False
     if any(
         plain == word or plain.startswith((word + ".", word + "-", word + "_"))
         for word in (
@@ -63,7 +100,7 @@ def shareable(name: str) -> bool:
         return False
     return not (
         name in HISTORY_DIRECTORIES + HISTORY_FILES
-        or plain in ("tmp", "sandbox", "sandbox-secrets", "env")
+        or plain in ("tmp", "sandbox", "sandbox-secrets", "env", "gemini", "codex")
         or plain.startswith(("gemini-accounts-", "codex-accounts-", "history-", "shared-", "backup"))
         or ".backup" in plain
         or ".sqlite" in plain
@@ -285,7 +322,7 @@ def _merge(
                 ancestors=ancestors,
             )
     elif source.is_file() and target.is_file():
-        if filecmp.cmp(source, target, shallow=False):
+        if filecmp.cmp(source, target, shallow=True) or filecmp.cmp(source, target, shallow=False):
             return
         if repair and source.stat().st_mtime_ns > target.stat().st_mtime_ns:
             _replace_file(source, target, backup)
@@ -339,6 +376,16 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                 (target / "config.toml").touch(mode=0o600)
             else:
                 (target / "config.toml").touch()
+        # Clean up any previously linked items that are no longer shareable.
+        for home in sorted(candidates):
+            stale = manifests[home] - names
+            for stale_name in stale:
+                stale_path = home / stale_name
+                if is_link(stale_path) and _linked(stale_path, target / stale_name):
+                    try:
+                        remove_link(stale_path)
+                    except OSError:
+                        pass
         # Import all homes before linking, so new files reach every account at once.
         migrations = []
         for home in sorted(candidates):
