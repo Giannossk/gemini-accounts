@@ -5,16 +5,15 @@ import base64
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .history import configured_history
-from .shared import prepare_home
+from .shared import configured_home, prepare_home
 from .state import AccountError, Store, default_root, safe_text, valid_email
 
 
@@ -34,14 +33,14 @@ def _is_wrapper(path: Path) -> bool:
     py_dir = Path(sys.executable).parent.resolve()
     for sub in ("", "Scripts", "bin"):
         folder = (py_dir / sub).resolve()
-        for stem in ("gemini", "gemini-accounts", "codex", "codex-accounts"):
+        for stem in ("gemini", "gemini-accounts"):
             wrappers.add((folder / stem).resolve())
             wrappers.add((folder / f"{stem}.exe").resolve())
             wrappers.add((folder / f"{stem}.cmd").resolve())
             wrappers.add((folder / f"{stem}.bat").resolve())
             wrappers.add((folder / f"{stem}.ps1").resolve())
 
-    for tool_name in ("gemini-accounts", "codex-accounts"):
+    for tool_name in ("gemini-accounts",):
         if wrapper := shutil.which(tool_name):
             try:
                 wrappers.add(Path(wrapper).resolve())
@@ -51,7 +50,7 @@ def _is_wrapper(path: Path) -> bool:
     if resolved in wrappers:
         return True
     if resolved.parent in (py_dir, (py_dir / "Scripts").resolve(), (py_dir / "bin").resolve()):
-        if resolved.stem in ("gemini", "gemini-accounts", "codex", "codex-accounts"):
+        if resolved.stem in ("gemini", "gemini-accounts"):
             return True
 
     return False
@@ -61,7 +60,6 @@ def gemini_binary() -> str:
     if custom := (
         os.environ.get("GEMINI_ACCOUNTS_GEMINI_BIN")
         or os.environ.get("GEMINI_ACCOUNTS_BIN")
-        or os.environ.get("CODEX_ACCOUNTS_CODEX_BIN")
     ):
         binary = shutil.which(custom)
         if binary is None:
@@ -144,9 +142,6 @@ def gemini_binary() -> str:
     raise AccountError(
         "Install Gemini CLI or set GEMINI_ACCOUNTS_GEMINI_BIN to its executable."
     )
-
-
-codex_binary = gemini_binary
 
 
 def _extract_email_from_jwt(id_token: str) -> str | None:
@@ -388,22 +383,17 @@ def account_environment(home: Path) -> dict[str, str]:
     gemini_dir = home / ".gemini" if (home / ".gemini").is_dir() else home
     env["GEMINI_CONFIG_DIR"] = str(gemini_dir)
     env["GEMINI_HOME"] = str(gemini_dir)
-    env["CODEX_HOME"] = str(home)
     if os.name != "nt":
         env["USERPROFILE"] = str(home)
     env["HOME"] = str(home)
     app_data = home / "antigravity-cli"
     env["ANTIGRAVITY_APP_DATA_DIR"] = str(app_data.resolve() if app_data.exists() else app_data)
-    if shared_history := configured_history(home):
+    if shared_history := configured_home(home):
         env["GEMINI_HISTORY_HOME"] = str(shared_history)
-        env["CODEX_SQLITE_HOME"] = str(shared_history)
     for name in (
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GOOGLE_APPLICATION_CREDENTIALS",
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-        "CODEX_ACCESS_TOKEN",
     ):
         env.pop(name, None)
     return env
@@ -457,45 +447,30 @@ def _read_identity_from_files(home: Path) -> dict | None:
                 except Exception:
                     pass
 
-        auth_file = base / "auth.json"
-        if auth_file.is_file():
-            try:
-                data = json.loads(auth_file.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    email = data.get("email")
-                    plan = data.get("planType") or data.get("plan") or "google"
-                    kind = data.get("type") or "google"
-                    if email and valid_email(email):
-                        return {"email": email, "plan": plan, "kind": kind}
-            except (ValueError, UnicodeError):
-                pass
 
     return None
 
 
 async def read_identity(binary: str, home: Path, *, timeout: float = 12) -> dict:
-    """Read the saved identity without requesting a token refresh."""
+    """Read the saved identity from local Google and keyring credentials."""
     if file_identity := _read_identity_from_files(home):
         return file_identity
-    try:
-        result = await _read_account(
-            binary, home, "account/read", params={"refreshToken": False}, timeout=timeout
-        )
-    except AccountError:
-        return {"email": None, "plan": None, "kind": "signedOut"}
-    if "account" not in result:
-        raise AccountError("Gemini returned invalid account metadata.")
-    account = result["account"]
-    if account is None:
-        return {"email": None, "plan": None, "kind": "signedOut"}
-    if not isinstance(account, dict) or not safe_text(account.get("type"), limit=64):
-        raise AccountError("Gemini returned an unsupported account identity.")
-    email, plan = account.get("email"), account.get("planType")
-    if email is not None and not valid_email(email):
-        raise AccountError("Gemini did not return a valid email address.")
-    if plan is not None and not safe_text(plan, limit=64):
-        raise AccountError("Gemini returned invalid account plan metadata.")
-    return {"email": email, "plan": plan, "kind": account["type"]}
+    cred = read_keyring_credential("gemini", "antigravity")
+    if cred:
+        try:
+            data = json.loads(cred)
+            tok_obj = data.get("token") if isinstance(data.get("token"), dict) else data
+            id_token = tok_obj.get("id_token")
+            if id_token:
+                email = _extract_email_from_jwt(id_token)
+                if email and valid_email(email):
+                    return {"email": email, "plan": "google", "kind": "google"}
+            email = tok_obj.get("email") or data.get("email")
+            if email and valid_email(email):
+                return {"email": email, "plan": "google", "kind": "google"}
+        except Exception:
+            pass
+    return {"email": None, "plan": None, "kind": "signedOut"}
 
 
 def _read_rate_limits_from_files(home: Path) -> dict | None:
@@ -584,28 +559,48 @@ def _fetch_live_quota(home: Path, timeout: float = 5) -> dict | None:
             "https://cloudcode-pa.googleapis.com",
             "https://daily-cloudcode-pa.googleapis.com",
         ):
-            url = f"{host}/v1internal:retrieveUserQuotaSummary"
-            req = urllib.request.Request(
-                url,
-                data=b"{}",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "antigravity",
-                },
-                method="POST",
-            )
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "User-Agent": "antigravity",
+            }
+            summary_data = None
             try:
+                req = urllib.request.Request(
+                    f"{host}/v1internal:retrieveUserQuotaSummary",
+                    data=b"{}",
+                    headers=headers,
+                    method="POST",
+                )
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    if isinstance(data, dict):
-                        return data
+                    summary_data = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     return "UNAUTHORIZED"
-                continue
             except Exception:
-                continue
+                pass
+
+            model_data = None
+            try:
+                req = urllib.request.Request(
+                    f"{host}/v1internal:retrieveUserQuota",
+                    data=b"{}",
+                    headers=headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    model_data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and summary_data is None:
+                    return "UNAUTHORIZED"
+            except Exception:
+                pass
+
+            if isinstance(summary_data, dict) or isinstance(model_data, dict):
+                res = summary_data if isinstance(summary_data, dict) else {}
+                if isinstance(model_data, dict) and "buckets" in model_data:
+                    res["modelBuckets"] = model_data["buckets"]
+                return res
         return None
 
     res = _request_quota(token)
@@ -627,121 +622,74 @@ def _fetch_live_quota(home: Path, timeout: float = 5) -> dict | None:
     return res if isinstance(res, dict) else None
 
 
-async def read_rate_limits(binary: str, home: Path, *, timeout: float = 5) -> dict:
-    """Read live quota metadata through Gemini's credential backend."""
-    if file_limits := _read_rate_limits_from_files(home):
-        return file_limits
+_cli_quota_lock = threading.Lock()
+
+
+def _fetch_cli_quota(binary: str, home: Path, timeout: float = 15) -> dict | None:
+    if not binary:
+        return None
+    with _cli_quota_lock:
+        try:
+            sync_keyring_from_home(home)
+            env = account_environment(home)
+            gemini_dir = home / ".gemini" if (home / ".gemini").is_dir() else home
+            env["GEMINI_DIR"] = str(gemini_dir.resolve())
+            cmd = [binary, "--output-format", "json", "--print", "/usage"]
+            if os.name == "nt":
+                lower = binary.lower()
+                if lower.endswith((".cmd", ".bat")):
+                    cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/c", binary, "--output-format", "json", "--print", "/usage"]
+                elif lower.endswith(".ps1"):
+                    cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", binary, "--output-format", "json", "--print", "/usage"]
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                text = proc.stdout.strip()
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    start = text.find("{")
+                    end = text.rfind("}")
+                    if start != -1 and end != -1 and end > start:
+                        data = json.loads(text[start : end + 1])
+                    else:
+                        data = None
+                if isinstance(data, dict):
+                    cmd_data = (
+                        data.get("command", {}).get("data")
+                        if isinstance(data.get("command"), dict)
+                        else data
+                    )
+                    if isinstance(cmd_data, dict):
+                        return cmd_data
+        except Exception:
+            pass
+        return None
+
+
+async def read_rate_limits(binary: str, home: Path, *, timeout: float = 15) -> dict:
+    """Read live quota metadata through Gemini CLI or credential backend."""
+    try:
+        cli_quota = await asyncio.to_thread(_fetch_cli_quota, binary, home, timeout)
+        if cli_quota:
+            return cli_quota
+    except Exception:
+        pass
     try:
         live_quota = await asyncio.to_thread(_fetch_live_quota, home, timeout)
         if live_quota:
             return live_quota
     except Exception:
         pass
-    return await _read_account(binary, home, "account/rateLimits/read", timeout=timeout)
-
-
-async def _read_account(
-    binary: str,
-    home: Path,
-    method: str,
-    *,
-    params: dict | None = None,
-    timeout: float,
-) -> dict:
-    """Make a bounded stdio account request without starting a conversation."""
-    cmd = [binary]
-    if os.name == "nt":
-        lower = binary.lower()
-        if lower.endswith((".cmd", ".bat")):
-            cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/c", binary]
-        elif lower.endswith(".ps1"):
-            cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", binary]
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        "app-server",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        env=account_environment(home),
-        start_new_session=os.name == "posix",
-        limit=1024 * 1024,
-    )
-
-    async def send(message: dict) -> None:
-        process.stdin.write((json.dumps(message) + "\n").encode())
-        await process.stdin.drain()
-
-    async def response(request_id: int) -> dict:
-        while line := await process.stdout.readline():
-            message = json.loads(line)
-            if not isinstance(message, dict):
-                raise AccountError("Gemini returned invalid account metadata.")
-            if message.get("id") == request_id and (
-                "result" in message or "error" in message
-            ):
-                if "error" in message or not isinstance(message.get("result"), dict):
-                    raise AccountError("Gemini could not read the account metadata.")
-                return message["result"]
-            if "method" in message and "id" in message:
-                await send(
-                    {
-                        "id": message["id"],
-                        "error": {"code": -32601, "message": "Unsupported request"},
-                    }
-                )
-        raise AccountError("Gemini exited before returning account metadata.")
-
-    async def exchange() -> dict:
-        await send(
-            {
-                "id": 0,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {
-                        "name": "gemini_accounts",
-                        "title": "Gemini Accounts",
-                        "version": "0.1.0",
-                    }
-                },
-            }
-        )
-        await response(0)
-        await send({"method": "initialized", "params": {}})
-        request = {"id": 1, "method": method}
-        if params is not None:
-            request["params"] = params
-        await send(request)
-        return await response(1)
-
-    try:
-        return await asyncio.wait_for(exchange(), timeout)
-    except (TimeoutError, ValueError, BrokenPipeError, ConnectionError) as error:
-        raise AccountError(
-            "Could not read the account metadata. Try gemini list accounts --refresh."
-        ) from error
-    finally:
-        process.stdin.close()
-        try:
-            await asyncio.wait_for(process.wait(), 1)
-        except TimeoutError:
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            elif process.returncode is None:
-                process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), 1)
-            except TimeoutError:
-                if os.name == "posix":
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                else:
-                    process.kill()
-                await process.wait()
+    if file_limits := _read_rate_limits_from_files(home):
+        return file_limits
+    return {}
 
 
 def launch(home: Path, arguments: list[str]) -> int:
@@ -751,7 +699,6 @@ def launch(home: Path, arguments: list[str]) -> int:
     env = account_environment(home)
     if shared_history:
         env["GEMINI_HISTORY_HOME"] = str(shared_history)
-        env["CODEX_SQLITE_HOME"] = str(shared_history)
     sys.stdout.flush()
     sys.stderr.flush()
     if os.name == "posix":

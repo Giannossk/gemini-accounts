@@ -265,6 +265,100 @@ class QuotaTests(unittest.TestCase):
             "5h: 50% left | weekly: 75% left",
         )
 
+    def test_model_buckets_fallback_when_no_gemini_group(self):
+        summary_3p_only = {
+            "groups": [
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1.0},
+                        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1.0},
+                    ],
+                }
+            ],
+            "modelBuckets": [
+                {"modelId": "gemini-2.5-flash", "remainingFraction": 0.84},
+                {"modelId": "gemini-3-flash", "remainingFraction": 0.84},
+                {"modelId": "claude-3-5-sonnet", "remainingFraction": 1.0},
+            ],
+        }
+        self.assertEqual(
+            describe_quota(summary_3p_only),
+            "5h: 84% left | weekly: 100% left",
+        )
+
+    def test_model_buckets_takes_lowest_gemini_fraction(self):
+        summary = {
+            "modelBuckets": [
+                {"modelId": "gemini-2.5-flash", "remainingFraction": 0.85},
+                {"modelId": "gemini-2.5-pro", "remainingFraction": 0.60},
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 60% left | weekly: 100% left",
+        )
+
+    def test_model_buckets_identifies_weekly_by_reset_time(self):
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        future_weekly = (now + datetime.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        summary = {
+            "modelBuckets": [
+                {
+                    "modelId": "gemini-2.5-flash",
+                    "remainingFraction": 0.27,
+                    "resetTime": future_weekly,
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 100% left | weekly: 27% left",
+        )
+
+    def test_model_buckets_identifies_5h_by_reset_time(self):
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        future_5h = (now + datetime.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        summary = {
+            "modelBuckets": [
+                {
+                    "modelId": "gemini-2.5-flash",
+                    "remainingFraction": 0.82,
+                    "resetTime": future_5h,
+                }
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 82% left | weekly: 100% left",
+        )
+
+    def test_model_buckets_both_5h_and_weekly(self):
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        future_5h = (now + datetime.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        future_weekly = (now + datetime.timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        summary = {
+            "modelBuckets": [
+                {
+                    "modelId": "gemini-2.5-flash",
+                    "remainingFraction": 0.80,
+                    "resetTime": future_5h,
+                },
+                {
+                    "modelId": "gemini-2.5-flash-lite",
+                    "remainingFraction": 0.35,
+                    "resetTime": future_weekly,
+                },
+            ]
+        }
+        self.assertEqual(
+            describe_quota(summary),
+            "5h: 80% left | weekly: 35% left",
+        )
+
     def test_fetch_live_quota_queries_production_first(self):
         import io
         from gemini_accounts.native import _fetch_live_quota
@@ -280,9 +374,9 @@ class QuotaTests(unittest.TestCase):
 
             def fake_urlopen(req, timeout=5):
                 requested_urls.append(req.full_url)
-                resp = io.BytesIO(b'{"groups": [{"displayName": "Gemini Models", "buckets": []}]}')
-                resp.read = resp.getvalue
-                return io.BytesIO(b'{"groups": [{"displayName": "Gemini Models", "buckets": []}]}')
+                if "retrieveUserQuotaSummary" in req.full_url:
+                    return io.BytesIO(b'{"groups": [{"displayName": "Claude and GPT models", "buckets": []}]}')
+                return io.BytesIO(b'{"buckets": [{"modelId": "gemini-2.5-flash", "remainingFraction": 0.84}]}')
 
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 result = _fetch_live_quota(home)
@@ -291,6 +385,12 @@ class QuotaTests(unittest.TestCase):
                     requested_urls[0],
                     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
                 )
+                self.assertEqual(
+                    requested_urls[1],
+                    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+                )
+                self.assertEqual(len(result["modelBuckets"]), 1)
+                self.assertEqual(result["modelBuckets"][0]["modelId"], "gemini-2.5-flash")
 
 
     def test_list_accounts_with_show_quota(self):
@@ -317,6 +417,103 @@ class QuotaTests(unittest.TestCase):
             output = out.getvalue()
             self.assertIn("5h: 80% left | weekly: 90% left", output)
             self.assertIn("user1@example.com", output)
+
+    def test_describe_quota_antigravity_cli_snake_case_format(self):
+        agy_usage_output = {
+            "groups": [
+                {
+                    "name": "Gemini Models",
+                    "description": "Models within this group: Gemini Flash, Gemini Pro",
+                    "buckets": [
+                        {
+                            "id": "gemini-weekly",
+                            "name": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remaining_fraction": 0.3845,
+                            "reset_time": "2026-10-25T11:36:18Z",
+                        },
+                        {
+                            "id": "gemini-5h",
+                            "name": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "remaining_fraction": 0.6193,
+                            "reset_time": "2026-10-22T02:11:43Z",
+                        },
+                    ],
+                },
+                {
+                    "name": "Claude and GPT models",
+                    "buckets": [
+                        {
+                            "id": "3p-weekly",
+                            "window": "weekly",
+                            "remaining_fraction": 1.0,
+                        }
+                    ],
+                },
+            ]
+        }
+        self.assertEqual(
+            describe_quota(agy_usage_output),
+            "5h: 62% left | weekly: 38% left",
+        )
+
+    def test_fetch_cli_quota_success_and_failure(self):
+        import subprocess
+        from gemini_accounts.native import _fetch_cli_quota
+
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            # 1. Success case
+            fake_stdout = (
+                '{"conversation_id":"","status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models"}]}}}'
+            )
+            mock_proc = subprocess.CompletedProcess(
+                args=["agy", "--output-format", "json", "--print", "/usage"],
+                returncode=0,
+                stdout=fake_stdout,
+                stderr="",
+            )
+            with (
+                patch("gemini_accounts.native.sync_keyring_from_home"),
+                patch("subprocess.run", return_value=mock_proc),
+            ):
+                res = _fetch_cli_quota("agy", home)
+                self.assertIsNotNone(res)
+                self.assertIn("groups", res)
+                self.assertEqual(res["groups"][0]["name"], "Gemini Models")
+
+            # 2. Failure case (returncode != 0)
+            mock_fail = subprocess.CompletedProcess(
+                args=["agy"],
+                returncode=1,
+                stdout="",
+                stderr="error",
+            )
+            with (
+                patch("gemini_accounts.native.sync_keyring_from_home"),
+                patch("subprocess.run", return_value=mock_fail),
+            ):
+                res = _fetch_cli_quota("agy", home)
+                self.assertIsNone(res)
+
+    def test_read_rate_limits_prefers_cli_quota(self):
+        from gemini_accounts.native import read_rate_limits
+
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            cli_data = {"groups": [{"name": "Gemini Models"}]}
+            with (
+                patch("gemini_accounts.native._fetch_cli_quota", return_value=cli_data),
+                patch("gemini_accounts.native._fetch_live_quota") as mock_live,
+            ):
+                loop = asyncio.new_event_loop()
+                try:
+                    res = loop.run_until_complete(read_rate_limits("agy", home))
+                finally:
+                    loop.close()
+                self.assertEqual(res, cli_data)
+                mock_live.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ from datetime import date, datetime, time, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from gemini_accounts.history import prepare_history
 from gemini_accounts.shared import DIRECTORIES, MARKER, _toml_document, prepare_home
 from gemini_accounts.state import AccountError, Store
 
@@ -34,7 +33,6 @@ class SharedHomeTests(unittest.TestCase):
         environment = patch.dict(
             os.environ, {
                 "GEMINI_ACCOUNTS_HISTORY_HOME": str(self.shared),
-                "CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared),
             }
         )
         environment.start()
@@ -116,7 +114,7 @@ class SharedHomeTests(unittest.TestCase):
             "auth.json",
             "auth.json.backup",
             ".credentials.json",
-            "secrets/codex_auth.age",
+            "secrets/gemini_auth.age",
             "secrets/mcp_oauth.age",
             "tokens.json",
             "google_accounts.json",

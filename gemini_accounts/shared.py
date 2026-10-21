@@ -10,20 +10,11 @@ import uuid
 from datetime import date, datetime, time
 from pathlib import Path
 
-from .history import (
-    DIRECTORIES as HISTORY_DIRECTORIES,
-    FILES as HISTORY_FILES,
-    _linked,
-    _write_json,
-    create_link,
-    is_link,
-    prepare_history,
-    remove_link,
-)
 from .state import AccountError, Store, file_lock, private_directory
 
 MARKER = ".gemini-accounts-shared"
-# Prelink extensible directories even before the first skill/rule/etc. is added.
+
+# Extensible directories prelinked across all account homes
 DIRECTORIES = (
     "skills",
     "plugins",
@@ -41,8 +32,20 @@ DIRECTORIES = (
     "history",
     "shell_snapshots",
     "antigravity-cli",
+    "sessions",
+    "archived_sessions",
+    "conversations",
 )
 
+# Standard files shared across all account homes
+SHARED_FILES = (
+    "settings.json",
+    "config.toml",
+    "mcp_config.json",
+    "history.jsonl",
+    "session_index.jsonl",
+    "conversation_summaries.db",
+)
 
 IGNORED_SYSTEM_NAMES = {
     "appdata",
@@ -77,6 +80,105 @@ IGNORED_SYSTEM_NAMES = {
 }
 
 
+def is_junction(path: Path) -> bool:
+    if os.name != "nt":
+        return False
+    if hasattr(path, "is_junction"):
+        try:
+            return path.is_junction()
+        except OSError:
+            return False
+    if hasattr(os.path, "isjunction"):
+        try:
+            return os.path.isjunction(str(path))
+        except OSError:
+            return False
+    return False
+
+
+def is_link(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    return is_junction(path)
+
+
+def create_link(source: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        source.symlink_to(target, target_is_directory=target_is_directory)
+        return
+    except OSError:
+        if os.name != "nt":
+            raise
+    if target_is_directory or target.is_dir():
+        import _winapi
+
+        _winapi.CreateJunction(str(target.resolve()), str(source))
+    else:
+        try:
+            os.link(str(target.resolve()), str(source))
+        except OSError:
+            shutil.copy2(target, source)
+
+
+def remove_link(path: Path) -> None:
+    if is_junction(path):
+        try:
+            path.unlink()
+        except OSError:
+            os.rmdir(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _linked(source: Path, target: Path) -> bool:
+    if not source.exists() and not is_link(source):
+        return False
+    if not target.exists():
+        return False
+    try:
+        if is_link(source):
+            return source.resolve() == target.resolve()
+        if os.name == "nt" and source.is_file() and target.is_file():
+            return source.samefile(target)
+        return source.resolve() == target.resolve()
+    except OSError:
+        return False
+
+
+def _write_json(path: Path, value: object) -> None:
+    temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            if os.name == "posix":
+                temporary.chmod(0o600)
+            json.dump(value, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _merge_lines(source: Path, target: Path) -> None:
+    lock_path = target if os.name != "nt" else target.with_name(f".{target.name}.lock")
+    if os.name != "nt" and target.exists() and target.stat().st_size == 0:
+        with target.open("ab") as handle:
+            handle.write(b"\n")
+    with file_lock(lock_path):
+        existing = target.read_bytes() if target.exists() else b""
+        seen = set(existing.splitlines())
+        with target.open("ab") as handle:
+            if existing and not existing.endswith(b"\n"):
+                handle.write(b"\n")
+            for line in source.read_bytes().splitlines():
+                if line and line not in seen:
+                    handle.write(line + b"\n")
+                    seen.add(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
 def shareable(name: str) -> bool:
     """Credentials, recovery copies, process-local files, and OS directories stay in place."""
     if name.startswith("."):
@@ -100,13 +202,56 @@ def shareable(name: str) -> bool:
     ):
         return False
     return not (
-        name in HISTORY_DIRECTORIES + HISTORY_FILES
-        or plain in ("tmp", "sandbox", "sandbox-secrets", "env", "gemini", "codex")
-        or plain.startswith(("gemini-accounts-", "codex-accounts-", "history-", "shared-", "backup"))
+        plain in ("tmp", "sandbox", "sandbox-secrets", "env", "gemini")
+        or plain.startswith(("gemini-accounts-", "history-", "shared-", "backup"))
         or ".backup" in plain
         or ".sqlite" in plain
         or plain.endswith((".lock", ".sock", ".pid"))
     )
+
+
+def shared_home(store: Store) -> Path:
+    """Pin the existing default store; never derive history from the selected login."""
+    path = store.root / "history.json"
+    requested = os.environ.get("GEMINI_ACCOUNTS_HISTORY_HOME")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        target = (
+            Path(requested).expanduser() if requested else Path.home() / ".gemini"
+        ).resolve()
+        private_directory(target)
+        _write_json(path, {"version": 1, "home": str(target)})
+        return target
+    except (ValueError, UnicodeError) as error:
+        raise AccountError(f"Invalid shared history settings: {path}") from error
+    if (
+        not isinstance(value, dict)
+        or value.get("version") != 1
+        or not isinstance(value.get("home"), str)
+        or not Path(value["home"]).is_absolute()
+    ):
+        raise AccountError(f"Invalid shared history settings: {path}")
+    target = Path(value["home"])
+    if requested and Path(requested).expanduser().resolve() != target:
+        raise AccountError(f"Shared history is already configured at {target}.")
+    if not target.is_dir():
+        raise AccountError(f"The shared history directory is missing: {target}")
+    return target
+
+
+def configured_home(account_home: Path) -> Path | None:
+    marker = account_home / MARKER
+    if marker.is_file():
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(data, str) and Path(data).is_absolute():
+                return Path(data)
+            if isinstance(data, dict) and isinstance(data.get("home"), str):
+                return Path(data["home"])
+        except (ValueError, UnicodeError):
+            pass
+    return None
 
 
 def _manifest(home: Path, target: Path) -> set[str]:
@@ -182,7 +327,7 @@ def _toml_value(value: object) -> str:
             )
             + " }"
         )
-    raise AccountError("Unsupported value in Codex configuration; originals retained.")
+    raise AccountError("Unsupported value in Gemini configuration; originals retained.")
 
 
 def _toml_document(value: dict, prefix: tuple[str, ...] = ()) -> str:
@@ -206,7 +351,6 @@ def _save_original(source: Path, backup: Path) -> None:
 
 
 def _replace_file(source: Path, target: Path, backup: Path) -> None:
-    # Resolve user-owned links too: atomic writes must not detach their links.
     destination = target.resolve()
     _save_original(destination, backup)
     temporary = destination.with_name(f".shared-{uuid.uuid4().hex}.tmp")
@@ -228,7 +372,6 @@ def _merge_config(source: Path, target: Path, backup: Path) -> None:
     if not _merge_missing(target_value, source_value):
         return
     contents = _toml_document(target_value)
-    # Validate the complete serialization before replacing any user file.
     tomllib.loads(contents)
     destination = target.resolve()
     _save_original(destination, backup)
@@ -298,7 +441,6 @@ def _merge(
         ancestors = ancestors | {resolved}
     if not target.exists() and not is_link(target):
         if is_link(source):
-            # Absolute links keep externally installed skills working after relocation.
             create_link(target, source.resolve(), target_is_directory=source.is_dir())
         elif source.is_dir():
             private_directory(target)
@@ -331,12 +473,15 @@ def _merge(
             _merge_json_config(source, target, backup)
         elif source.name == "config.toml" or source.name.endswith(".config.toml"):
             _merge_config(source, target, backup)
-    # Conflicts keep the existing shared version; the entire source is backed up.
+        elif source.name in ("history.jsonl", "session_index.jsonl"):
+            _merge_lines(source, target)
 
 
 def prepare_home(store: Store, account_home: Path | None = None) -> Path:
     """Migrate all registered homes, then link all noncredential persistent files."""
-    target = prepare_history(store, account_home)
+    private_directory(store.root)
+    target = shared_home(store)
+
     with file_lock(store.root / "shared.lock"):
         candidates = {
             Path(row["home"]).resolve() for row in store.read()["accounts"].values()
@@ -349,10 +494,10 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                 raise AccountError(
                     "Shared and account homes cannot contain one another."
                 )
-        names = set(DIRECTORIES) | {"config.toml", "settings.json"}
+        names = set(DIRECTORIES) | set(SHARED_FILES)
         for home in [target, *sorted(candidates)]:
             names.update(path.name for path in home.iterdir() if shareable(path.name))
-        # Check links are supported in every home before migrating settings.
+
         manifests = {}
         for home in sorted(candidates):
             manifests[home] = _manifest(home, target)
@@ -365,18 +510,16 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                 ) from error
             finally:
                 remove_link(probe)
+
         for name in DIRECTORIES:
             private_directory(target / name)
-        if not (target / "settings.json").exists():
-            if os.name == "posix":
-                (target / "settings.json").touch(mode=0o600)
-            else:
-                (target / "settings.json").touch()
-        if not (target / "config.toml").exists():
-            if os.name == "posix":
-                (target / "config.toml").touch(mode=0o600)
-            else:
-                (target / "config.toml").touch()
+        for fname in ("settings.json", "config.toml"):
+            if not (target / fname).exists():
+                if os.name == "posix":
+                    (target / fname).touch(mode=0o600)
+                else:
+                    (target / fname).touch()
+
         # Clean up any previously linked items that are no longer shareable.
         for home in sorted(candidates):
             stale = manifests[home] - names
@@ -387,6 +530,7 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                         remove_link(stale_path)
                     except OSError:
                         pass
+
         # Import all homes before linking, so new files reach every account at once.
         migrations = []
         for home in sorted(candidates):
@@ -406,6 +550,7 @@ def prepare_home(store: Store, account_home: Path | None = None) -> Path:
                     repair=name in manifests[home],
                 )
             migrations.append((home, pending, backup))
+
         for home, pending, backup in migrations:
             for name in pending:
                 source, destination = home / name, target / name

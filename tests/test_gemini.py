@@ -30,7 +30,6 @@ class GeminiAccountsTests(unittest.TestCase):
         self.store = Store(self.root / "state")
         env_patch = patch.dict(os.environ, {
             "GEMINI_ACCOUNTS_HISTORY_HOME": str(self.shared),
-            "CODEX_ACCOUNTS_HISTORY_HOME": str(self.shared),
         })
         env_patch.start()
         self.addCleanup(env_patch.stop)
@@ -101,7 +100,6 @@ class GeminiAccountsTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "GEMINI_API_KEY": "secret-key",
             "GOOGLE_API_KEY": "google-key",
-            "OPENAI_API_KEY": "openai-key",
         }):
             env = account_environment(home)
             self.assertEqual(env["GEMINI_CLI_HOME"], str(home))
@@ -109,7 +107,6 @@ class GeminiAccountsTests(unittest.TestCase):
             self.assertEqual(env["GEMINI_HOME"], str(gemini_dir))
             self.assertNotIn("GEMINI_API_KEY", env)
             self.assertNotIn("GOOGLE_API_KEY", env)
-            self.assertNotIn("OPENAI_API_KEY", env)
 
     def test_account_environment_resolves_antigravity_app_data_dir(self):
         home = self.root / "acc_agy"
@@ -213,27 +210,34 @@ class GeminiAccountsTests(unittest.TestCase):
         self.assertEqual(state["selected"], list(state["accounts"].keys())[0])
 
 
-    def test_import_legacy_history(self):
-        from gemini_accounts.history import _import_legacy_history
-        legacy = self.root / "legacy_codex"
-        legacy.mkdir()
-        (legacy / "sessions").mkdir()
-        (legacy / "sessions" / "session1.jsonl").write_text('{"turn": 1}\n', encoding="utf-8")
-        (legacy / "history.jsonl").write_text('{"text": "cmd1"}\n', encoding="utf-8")
-        (legacy / "session_index.jsonl").write_text('{"id": "s1"}\n', encoding="utf-8")
+    def test_consolidated_prepare_home_links_all_directories_and_files(self):
+        from gemini_accounts.shared import DIRECTORIES, SHARED_FILES, configured_home, prepare_home
 
-        target = self.root / "target_gemini"
-        target.mkdir()
+        home = self.root / "acc_consolidated"
+        home.mkdir()
+        with self.store.edit() as state:
+            state["accounts"]["acc_cons"] = {"home": str(home), "email": "test@example.com"}
 
-        _import_legacy_history(legacy, target, self.store)
+        target = prepare_home(self.store, home)
+        self.assertTrue(target.is_dir())
 
-        self.assertTrue((target / "sessions" / "session1.jsonl").is_file())
-        self.assertEqual(
-            (target / "sessions" / "session1.jsonl").read_text(encoding="utf-8"),
-            '{"turn": 1}\n',
-        )
-        self.assertIn('{"text": "cmd1"}', (target / "history.jsonl").read_text(encoding="utf-8"))
-        self.assertIn('{"id": "s1"}', (target / "session_index.jsonl").read_text(encoding="utf-8"))
+        # Verify configured_home finds the shared target
+        self.assertEqual(configured_home(home), target)
+
+        # Verify all directories exist in target
+        for d in DIRECTORIES:
+            self.assertTrue((target / d).is_dir(), f"Missing directory {d}")
+            self.assertTrue((home / d).exists(), f"Account home missing link {d}")
+
+        # Verify config files exist in target and home
+        for f in ("settings.json", "config.toml"):
+            self.assertTrue((target / f).is_file())
+            self.assertTrue((home / f).exists())
+
+        # Repeated calls should be idempotent and fast
+        target2 = prepare_home(self.store, home)
+        self.assertEqual(target, target2)
+
 
 
 if __name__ == "__main__":

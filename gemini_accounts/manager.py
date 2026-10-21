@@ -1,6 +1,7 @@
 """Email discovery, account registration, and manual selection."""
 
 import asyncio
+import datetime
 import json
 import os
 import shutil
@@ -35,8 +36,44 @@ def describe(record: dict) -> str:
     return f"{email}  ({detail})"
 
 
+def _window_duration(bucket: dict) -> int | None:
+    for key in ("window", "bucketId", "displayName", "description", "id", "name"):
+        val = str(bucket.get(key) or "").lower()
+        if "5h" in val or "5 hour" in val or "5-hour" in val or "five hour" in val:
+            return 300
+        if "week" in val or "7d" in val:
+            return 10080
+
+    reset_time = bucket.get("resetTime") or bucket.get("reset_time")
+    if reset_time and isinstance(reset_time, str):
+        try:
+            clean_time = reset_time.replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(clean_time)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.timezone.utc)
+            diff_seconds = (dt - now).total_seconds()
+            if diff_seconds > 6 * 3600:
+                return 10080
+            return 300
+        except Exception:
+            pass
+
+    return 300
+
+
+def _calc_pct(frac: float | int) -> int:
+    pct = int(round(frac * 100))
+    if frac < 1.0 and pct == 100:
+        pct = 99
+    elif frac > 0.0 and pct == 0:
+        pct = 1
+    return max(0, min(100, pct))
+
+
 def describe_quota(result: dict | None) -> str:
     remaining = {300: None, 10080: None}
+    has_gemini = False
     if isinstance(result, dict):
         groups = result.get("groups")
         if isinstance(groups, list):
@@ -44,48 +81,65 @@ def describe_quota(result: dict | None) -> str:
             for g in groups:
                 if not isinstance(g, dict):
                     continue
-                name = (g.get("displayName") or "").lower()
+                name = (g.get("displayName") or g.get("name") or "").lower()
                 desc = (g.get("description") or "").lower()
-                gid = (g.get("groupId") or "").lower()
+                gid = (g.get("groupId") or g.get("id") or "").lower()
                 if "gemini" in name or "gemini" in desc or "gemini" in gid:
                     gemini_group = g
                     break
                 buckets = g.get("buckets", [])
                 if isinstance(buckets, list) and any(
-                    "gemini" in str(b.get("bucketId", "")).lower()
+                    "gemini" in str(b.get("bucketId") or b.get("id") or "").lower()
                     for b in buckets
                     if isinstance(b, dict)
                 ):
                     gemini_group = g
                     break
-            if not gemini_group and groups and isinstance(groups[0], dict):
-                gemini_group = groups[0]
             if gemini_group:
+                has_gemini = True
                 for b in gemini_group.get("buckets", []):
                     if not isinstance(b, dict):
                         continue
-                    w = str(b.get("window") or b.get("bucketId") or "").lower()
+                    dur = _window_duration(b)
                     frac = b.get("remainingFraction")
-                    if frac is not None and isinstance(frac, (int, float)):
-                        pct = int(round(frac * 100))
-                        if frac < 1.0 and pct == 100:
-                            pct = 99
-                        elif frac > 0.0 and pct == 0:
-                            pct = 1
-                        pct = max(0, min(100, pct))
-                        if "5h" in w:
-                            remaining[300] = pct
-                        elif "week" in w:
-                            remaining[10080] = pct
+                    if frac is None:
+                        frac = b.get("remaining_fraction")
+                    if dur in remaining and isinstance(frac, (int, float)):
+                        remaining[dur] = _calc_pct(frac)
+
+        model_buckets = result.get("modelBuckets") or result.get("buckets")
+        if isinstance(model_buckets, list):
+            dur_fracs = {300: [], 10080: []}
+            for b in model_buckets:
+                if not isinstance(b, dict):
+                    continue
+                if "gemini" not in str(b.get("modelId") or b.get("id") or "").lower():
+                    continue
+                frac = b.get("remainingFraction")
+                if frac is None:
+                    frac = b.get("remaining_fraction")
+                if not isinstance(frac, (int, float)):
+                    continue
+                dur = _window_duration(b)
+                if dur in dur_fracs:
+                    dur_fracs[dur].append(frac)
+            if dur_fracs[300] or dur_fracs[10080]:
+                has_gemini = True
+                for dur in (300, 10080):
+                    if remaining[dur] is None and dur_fracs[dur]:
+                        remaining[dur] = _calc_pct(min(dur_fracs[dur]))
+
+        if has_gemini:
+            if remaining[300] is None:
+                remaining[300] = 100
+            if remaining[10080] is None:
+                remaining[10080] = 100
 
         limits = result.get("rateLimits")
         by_id = result.get("rateLimitsByLimitId")
-        if isinstance(by_id, dict):
-            for name in ("gemini", "codex"):
-                if name in by_id:
-                    limits = by_id[name]
-                    break
-        if isinstance(limits, dict) and limits.get("limitId") in (None, "gemini", "codex"):
+        if isinstance(by_id, dict) and "gemini" in by_id:
+            limits = by_id["gemini"]
+        if isinstance(limits, dict) and limits.get("limitId") in (None, "gemini"):
             for name in ("primary", "secondary"):
                 window = limits.get(name)
                 if not isinstance(window, dict):
@@ -113,13 +167,15 @@ def quota_labels(accounts: dict[str, dict]) -> dict[str, str]:
     except AccountError:
         return {key: describe_quota(None) for key in accounts}
 
+    saved_keyring = read_keyring_credential("gemini", "antigravity")
+
     async def collect():
         semaphore = asyncio.Semaphore(4)
 
         async def read(key, record):
             result = None
             home = Path(record["home"])
-            if record.get("kind") in (None, "google", "chatgpt") and home.is_dir():
+            if record.get("kind") in (None, "google") and home.is_dir():
                 async with semaphore:
                     try:
                         result = await read_rate_limits(binary, home)
@@ -127,7 +183,16 @@ def quota_labels(accounts: dict[str, dict]) -> dict[str, str]:
                         pass
             return key, describe_quota(result)
 
-        return dict(await asyncio.gather(*(read(k, r) for k, r in accounts.items())))
+        try:
+            return dict(await asyncio.gather(*(read(k, r) for k, r in accounts.items())))
+        finally:
+            if saved_keyring:
+                try:
+                    write_keyring_credential("gemini", "antigravity", saved_keyring)
+                except Exception:
+                    pass
+
+    return asyncio.run(collect())
 
     return asyncio.run(collect())
 

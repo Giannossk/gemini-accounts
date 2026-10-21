@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gemini_accounts.history import create_link, is_junction, is_link, remove_link, _linked
+from gemini_accounts.shared import create_link, is_junction, is_link, remove_link, _linked
 from gemini_accounts.native import gemini_binary, _is_wrapper
 from gemini_accounts.cli import run
 
@@ -25,7 +25,7 @@ class WindowsIntegrationTests(unittest.TestCase):
 
     def test_is_wrapper_identifies_current_scripts(self):
         py_scripts = Path(sys.executable).parent / "Scripts"
-        for stem in ("gemini.exe", "gemini-accounts.exe", "codex.exe"):
+        for stem in ("gemini.exe", "gemini-accounts.exe"):
             script = py_scripts / stem
             if script.exists():
                 self.assertTrue(_is_wrapper(script))

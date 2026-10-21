@@ -23,7 +23,7 @@ def private_directory(path: Path) -> None:
 
 
 def default_root() -> Path:
-    if custom := os.environ.get("GEMINI_ACCOUNTS_HOME") or os.environ.get("CODEX_ACCOUNTS_HOME"):
+    if custom := os.environ.get("GEMINI_ACCOUNTS_HOME"):
         return Path(custom).expanduser().resolve()
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
