@@ -400,7 +400,7 @@ def account_environment(home: Path) -> dict[str, str]:
 
 
 def _read_identity_from_files(home: Path) -> dict | None:
-    for base in (home / ".gemini", home):
+    for base in (home, home / ".gemini"):
         accounts_file = base / "google_accounts.json"
         if accounts_file.is_file():
             try:
@@ -419,7 +419,7 @@ def _read_identity_from_files(home: Path) -> dict | None:
             try:
                 data = json.loads(oauth_file.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    email = data.get("email")
+                    email = data.get("email") or data.get("id_token_email")
                     if email and valid_email(email):
                         return {"email": email, "plan": "google", "kind": "google"}
                     id_token = data.get("id_token")
@@ -441,7 +441,12 @@ def _read_identity_from_files(home: Path) -> dict | None:
                             jwt_email = _extract_email_from_jwt(id_token)
                             if jwt_email:
                                 return {"email": jwt_email, "plan": "google", "kind": "google"}
-                        email = data.get("email") or (data.get("token") or {}).get("email")
+                        email = (
+                            data.get("email")
+                            or (data.get("token") or {}).get("email")
+                            or data.get("id_token_email")
+                            or (data.get("token") or {}).get("id_token_email")
+                        )
                         if email and valid_email(email):
                             return {"email": email, "plan": "google", "kind": "google"}
                 except Exception:
@@ -460,12 +465,17 @@ async def read_identity(binary: str, home: Path, *, timeout: float = 12) -> dict
         try:
             data = json.loads(cred)
             tok_obj = data.get("token") if isinstance(data.get("token"), dict) else data
-            id_token = tok_obj.get("id_token")
+            id_token = tok_obj.get("id_token") or data.get("id_token")
             if id_token:
                 email = _extract_email_from_jwt(id_token)
                 if email and valid_email(email):
                     return {"email": email, "plan": "google", "kind": "google"}
-            email = tok_obj.get("email") or data.get("email")
+            email = (
+                tok_obj.get("email")
+                or data.get("email")
+                or tok_obj.get("id_token_email")
+                or data.get("id_token_email")
+            )
             if email and valid_email(email):
                 return {"email": email, "plan": "google", "kind": "google"}
         except Exception:

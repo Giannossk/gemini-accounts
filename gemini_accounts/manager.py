@@ -289,6 +289,15 @@ def add_account(
                     id_token = data.get("id_token") or (data.get("token") or {}).get("id_token")
                     if id_token:
                         active_email = _extract_email_from_jwt(id_token)
+                    if not active_email:
+                        cand = (
+                            data.get("id_token_email")
+                            or (data.get("token") or {}).get("id_token_email")
+                            or data.get("email")
+                            or (data.get("token") or {}).get("email")
+                        )
+                        if cand and valid_email(cand):
+                            active_email = cand
                 except Exception:
                     pass
             if not active_email:

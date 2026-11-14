@@ -185,6 +185,21 @@ class GeminiAccountsTests(unittest.TestCase):
         self.assertIsNotNone(identity)
         self.assertEqual(identity["email"], "keyringuser@gmail.com")
 
+    def test_read_identity_from_keyring_token_json_id_token_email(self):
+        home = self.root / "acc_keyring_id_token_email"
+        home.mkdir(parents=True)
+        (home / "keyring_token.json").write_text(
+            json.dumps({
+                "token": {"access_token": "ya29.xyz"},
+                "auth_method": "consumer",
+                "id_token_email": "directemail@gmail.com",
+            }),
+            encoding="utf-8",
+        )
+        identity = _read_identity_from_files(home)
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity["email"], "directemail@gmail.com")
+
     def test_binary_supports_login_agy_returns_false(self):
         from gemini_accounts.native import binary_supports_login
         self.assertFalse(binary_supports_login("agy"))
