@@ -225,6 +225,120 @@ class GeminiAccountsTests(unittest.TestCase):
         self.assertEqual(state["selected"], list(state["accounts"].keys())[0])
 
 
+    def test_read_identity_does_not_fallback_to_global_keyring_for_empty_home(self):
+        home = self.root / "empty_home"
+        home.mkdir()
+        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').decode("ascii").rstrip("=")
+        payload = base64.urlsafe_b64encode(b'{"email":"global@example.com"}').decode("ascii").rstrip("=")
+        jwt = f"{header}.{payload}.sig"
+        mock_cred = json.dumps({"id_token": jwt, "token": {"access_token": "tok"}})
+
+        with patch("gemini_accounts.native.read_keyring_credential", return_value=mock_cred):
+            identity = asyncio.run(read_identity("dummy", home))
+            self.assertEqual(identity["kind"], "signedOut")
+            self.assertIsNone(identity["email"])
+
+    def test_add_account_cancelled_does_not_readd_previous_account(self):
+        home1 = self.root / "acc1"
+        home1.mkdir(parents=True)
+        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').decode("ascii").rstrip("=")
+        payload = base64.urlsafe_b64encode(b'{"email":"first@example.com"}').decode("ascii").rstrip("=")
+        jwt = f"{header}.{payload}.sig"
+        cred1 = json.dumps({"id_token": jwt, "token": {"access_token": "tok1"}})
+        (home1 / "keyring_token.json").write_text(cred1, encoding="utf-8")
+
+        with self.store.edit() as state:
+            state["accounts"]["id1"] = {"home": str(home1), "email": "first@example.com", "kind": "google"}
+            state["selected"] = "id1"
+
+        keyring_val = cred1
+
+        def mock_read(s="gemini", u="antigravity"):
+            return keyring_val
+
+        def mock_write(s="gemini", u="antigravity", secret=""):
+            nonlocal keyring_val
+            keyring_val = secret
+            return True
+
+        def mock_delete(s="gemini", u="antigravity"):
+            nonlocal keyring_val
+            keyring_val = None
+            return True
+
+        class FakeProc:
+            returncode = 0
+
+        with patch("gemini_accounts.manager.gemini_binary", return_value="agy"), \
+             patch("gemini_accounts.manager.binary_supports_login", return_value=False), \
+             patch("gemini_accounts.manager.read_keyring_credential", side_effect=mock_read), \
+             patch("gemini_accounts.manager.write_keyring_credential", side_effect=mock_write), \
+             patch("gemini_accounts.manager.delete_keyring_credential", side_effect=mock_delete), \
+             patch("gemini_accounts.native.read_keyring_credential", side_effect=mock_read), \
+             patch("gemini_accounts.native.write_keyring_credential", side_effect=mock_write), \
+             patch("gemini_accounts.native.delete_keyring_credential", side_effect=mock_delete), \
+             patch("subprocess.run", return_value=FakeProc()):
+            code = add_account(self.store)
+            self.assertNotEqual(code, 0)
+
+        state = self.store.read()
+        self.assertEqual(len(state["accounts"]), 1)
+        self.assertIn("id1", state["accounts"])
+        self.assertEqual(state["accounts"]["id1"]["email"], "first@example.com")
+        self.assertEqual(keyring_val, cred1)
+
+    def test_add_account_duplicate_email_rejected(self):
+        from gemini_accounts.state import AccountError
+
+        home1 = self.root / "acc_dup1"
+        home1.mkdir(parents=True)
+        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').decode("ascii").rstrip("=")
+        payload = base64.urlsafe_b64encode(b'{"email":"dup@example.com"}').decode("ascii").rstrip("=")
+        jwt = f"{header}.{payload}.sig"
+        cred = json.dumps({"id_token": jwt, "token": {"access_token": "tok"}})
+        (home1 / "keyring_token.json").write_text(cred, encoding="utf-8")
+
+        with self.store.edit() as state:
+            state["accounts"]["id_dup1"] = {"home": str(home1), "email": "dup@example.com", "kind": "google"}
+            state["selected"] = "id_dup1"
+
+        keyring_val = cred
+
+        def mock_read(s="gemini", u="antigravity"):
+            return keyring_val
+
+        def mock_write(s="gemini", u="antigravity", secret=""):
+            nonlocal keyring_val
+            keyring_val = secret
+            return True
+
+        def mock_delete(s="gemini", u="antigravity"):
+            nonlocal keyring_val
+            keyring_val = None
+            return True
+
+        class FakeProc:
+            returncode = 0
+            def __init__(self):
+                nonlocal keyring_val
+                keyring_val = cred
+
+        with patch("gemini_accounts.manager.gemini_binary", return_value="agy"), \
+             patch("gemini_accounts.manager.binary_supports_login", return_value=False), \
+             patch("gemini_accounts.manager.read_keyring_credential", side_effect=mock_read), \
+             patch("gemini_accounts.manager.write_keyring_credential", side_effect=mock_write), \
+             patch("gemini_accounts.manager.delete_keyring_credential", side_effect=mock_delete), \
+             patch("gemini_accounts.native.read_keyring_credential", side_effect=mock_read), \
+             patch("gemini_accounts.native.write_keyring_credential", side_effect=mock_write), \
+             patch("gemini_accounts.native.delete_keyring_credential", side_effect=mock_delete), \
+             patch("subprocess.run", side_effect=lambda *a, **k: FakeProc()):
+            with self.assertRaises(AccountError) as ctx:
+                add_account(self.store)
+            self.assertIn("already in the account list", str(ctx.exception))
+
+        state = self.store.read()
+        self.assertEqual(len(state["accounts"]), 1)
+
     def test_consolidated_prepare_home_links_all_directories_and_files(self):
         from gemini_accounts.shared import DIRECTORIES, SHARED_FILES, configured_home, prepare_home
 

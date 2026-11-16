@@ -460,26 +460,6 @@ async def read_identity(binary: str, home: Path, *, timeout: float = 12) -> dict
     """Read the saved identity from local Google and keyring credentials."""
     if file_identity := _read_identity_from_files(home):
         return file_identity
-    cred = read_keyring_credential("gemini", "antigravity")
-    if cred:
-        try:
-            data = json.loads(cred)
-            tok_obj = data.get("token") if isinstance(data.get("token"), dict) else data
-            id_token = tok_obj.get("id_token") or data.get("id_token")
-            if id_token:
-                email = _extract_email_from_jwt(id_token)
-                if email and valid_email(email):
-                    return {"email": email, "plan": "google", "kind": "google"}
-            email = (
-                tok_obj.get("email")
-                or data.get("email")
-                or tok_obj.get("id_token_email")
-                or data.get("id_token_email")
-            )
-            if email and valid_email(email):
-                return {"email": email, "plan": "google", "kind": "google"}
-        except Exception:
-            pass
     return {"email": None, "plan": None, "kind": "signedOut"}
 
 

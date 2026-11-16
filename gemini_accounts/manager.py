@@ -258,158 +258,183 @@ def add_account(
     with file_lock(store.root / "signin.lock", blocking=False):
         state = store.read()
         account_id = uuid.uuid4().hex
-        if existing_home:
-            home = Path(existing_home).expanduser().resolve()
-            if not home.is_dir():
-                raise AccountError("The specified Gemini home does not exist.")
+        home = None
+        home_created = False
+        backup_cred = None
+        try:
+            if existing_home:
+                home = Path(existing_home).expanduser().resolve()
+                if not home.is_dir():
+                    raise AccountError("The specified Gemini home does not exist.")
+                if any(
+                    Path(record["home"]).resolve() == home
+                    for record in state["accounts"].values()
+                ):
+                    raise AccountError("That saved login is already in the account list.")
+            else:
+                homes = store.root / "homes"
+                if homes.is_symlink():
+                    raise AccountError(
+                        "The managed homes directory cannot be a symbolic link."
+                    )
+                private_directory(homes)
+                home = homes / account_id
+                private_directory(home)
+                private_directory(home / ".gemini")
+                home_created = True
+                prepare_home(store, home)
+
+                supports_login = binary_supports_login(binary)
+
+                active_cred = read_keyring_credential("gemini", "antigravity")
+                active_email = None
+                if active_cred:
+                    try:
+                        data = json.loads(active_cred)
+                        id_token = data.get("id_token") or (data.get("token") or {}).get("id_token")
+                        if id_token:
+                            active_email = _extract_email_from_jwt(id_token)
+                        if not active_email:
+                            cand = (
+                                data.get("id_token_email")
+                                or (data.get("token") or {}).get("id_token_email")
+                                or data.get("email")
+                                or (data.get("token") or {}).get("email")
+                            )
+                            if cand and valid_email(cand):
+                                active_email = cand
+                    except Exception:
+                        pass
+                if not active_email:
+                    default_gemini = Path.home() / ".gemini"
+                    if default_gemini.is_dir():
+                        id_info = _read_identity_from_files(default_gemini)
+                        if id_info and id_info.get("email"):
+                            active_email = id_info["email"]
+
+                already_registered = (
+                    any(record.get("email") == active_email for record in state["accounts"].values())
+                    if active_email
+                    else True
+                )
+
+                if not supports_login and active_email and not already_registered:
+                    print(f"Discovered active login for {active_email}.", flush=True)
+                    if active_cred:
+                        (home / "keyring_token.json").write_text(active_cred, encoding="utf-8")
+                        (home / ".gemini" / "keyring_token.json").write_text(active_cred, encoding="utf-8")
+                    default_gemini = Path.home() / ".gemini"
+                    if default_gemini.is_dir():
+                        for fname in ("google_accounts.json", "oauth_creds.json", "auth.json", "credentials.json"):
+                            src = default_gemini / fname
+                            if src.is_file():
+                                shutil.copy2(src, home / ".gemini" / fname)
+                else:
+                    print("Sign into the account you want to add.", flush=True)
+                    if supports_login:
+                        arguments = [binary, "login"]
+                        if device_auth:
+                            arguments.append("--device-auth")
+                    else:
+                        arguments = [binary]
+
+                    cmd = arguments
+                    if os.name == "nt":
+                        lower = cmd[0].lower()
+                        if lower.endswith((".cmd", ".bat")):
+                            cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/c", *cmd]
+                        elif lower.endswith(".ps1"):
+                            cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", *cmd]
+
+                    if not supports_login:
+                        backup_cred = read_keyring_credential("gemini", "antigravity")
+                        if backup_cred:
+                            delete_keyring_credential("gemini", "antigravity")
+
+                    try:
+                        result = subprocess.run(
+                            cmd, env=account_environment(home), check=False
+                        )
+                        if not supports_login:
+                            new_cred = read_keyring_credential("gemini", "antigravity")
+                            if new_cred:
+                                (home / "keyring_token.json").write_text(new_cred, encoding="utf-8")
+                                (home / ".gemini" / "keyring_token.json").write_text(new_cred, encoding="utf-8")
+                    finally:
+                        if not supports_login and backup_cred and not read_keyring_credential("gemini", "antigravity"):
+                            write_keyring_credential("gemini", "antigravity", backup_cred)
+
+                    if result.returncode:
+                        print(
+                            "Sign-in did not complete. Your account selection is unchanged.",
+                            file=sys.stderr,
+                        )
+                        return (
+                            result.returncode
+                            if result.returncode > 0
+                            else 128 - result.returncode
+                        )
+
+            try:
+                identity = asyncio.run(read_identity(binary, home))
+            except (AccountError, OSError):
+                if existing_home:
+                    raise AccountError(
+                        "Could not verify the email for that saved login. Try again."
+                    ) from None
+                identity = {"email": None, "plan": None, "kind": None}
+
+            if identity.get("kind") == "signedOut" or not identity.get("email"):
+                if existing_home:
+                    raise AccountError("There is no saved login in that Gemini home.")
+                if not supports_login and backup_cred:
+                    write_keyring_credential("gemini", "antigravity", backup_cred)
+                print(
+                    "Sign-in did not complete. Your account selection is unchanged.",
+                    file=sys.stderr,
+                )
+                return 1
+
             if any(
-                Path(record["home"]).resolve() == home
+                record.get("email") == identity["email"]
                 for record in state["accounts"].values()
             ):
-                raise AccountError("That saved login is already in the account list.")
-        else:
-            homes = store.root / "homes"
-            if homes.is_symlink():
-                raise AccountError(
-                    "The managed homes directory cannot be a symbolic link."
-                )
-            private_directory(homes)
-            home = homes / account_id
-            private_directory(home)
-            private_directory(home / ".gemini")
-            prepare_home(store, home)
+                if not supports_login and backup_cred:
+                    write_keyring_credential("gemini", "antigravity", backup_cred)
+                raise AccountError(f"Account {identity['email']} is already in the account list.")
 
-            supports_login = binary_supports_login(binary)
-
-            active_cred = read_keyring_credential("gemini", "antigravity")
-            active_email = None
-            if active_cred:
-                try:
-                    data = json.loads(active_cred)
-                    id_token = data.get("id_token") or (data.get("token") or {}).get("id_token")
-                    if id_token:
-                        active_email = _extract_email_from_jwt(id_token)
-                    if not active_email:
-                        cand = (
-                            data.get("id_token_email")
-                            or (data.get("token") or {}).get("id_token_email")
-                            or data.get("email")
-                            or (data.get("token") or {}).get("email")
-                        )
-                        if cand and valid_email(cand):
-                            active_email = cand
-                except Exception:
-                    pass
-            if not active_email:
-                default_gemini = Path.home() / ".gemini"
-                if default_gemini.is_dir():
-                    id_info = _read_identity_from_files(default_gemini)
-                    if id_info and id_info.get("email"):
-                        active_email = id_info["email"]
-
-            already_registered = (
-                any(record.get("email") == active_email for record in state["accounts"].values())
-                if active_email
-                else True
-            )
-
-            if not supports_login and active_email and not already_registered:
-                print(f"Discovered active login for {active_email}.", flush=True)
-                if active_cred:
-                    (home / "keyring_token.json").write_text(active_cred, encoding="utf-8")
-                    (home / ".gemini" / "keyring_token.json").write_text(active_cred, encoding="utf-8")
-                default_gemini = Path.home() / ".gemini"
-                if default_gemini.is_dir():
-                    for fname in ("google_accounts.json", "oauth_creds.json", "auth.json", "credentials.json"):
-                        src = default_gemini / fname
-                        if src.is_file():
-                            shutil.copy2(src, home / ".gemini" / fname)
-            else:
-                print("Sign into the account you want to add.", flush=True)
-                if supports_login:
-                    arguments = [binary, "login"]
-                    if device_auth:
-                        arguments.append("--device-auth")
+            with store.edit() as current:
+                if any(
+                    Path(record["home"]).resolve() == home
+                    for record in current["accounts"].values()
+                ):
+                    raise AccountError(
+                        "That saved login was already added by another terminal."
+                    )
+                if any(
+                    record.get("email") == identity["email"]
+                    for record in current["accounts"].values()
+                ):
+                    raise AccountError(f"Account {identity['email']} is already in the account list.")
+                current["accounts"][account_id] = {"home": str(home), **identity}
+                if current["selected"] is None:
+                    current["selected"] = account_id
                 else:
-                    arguments = [binary]
+                    sel_home = Path(current["accounts"][current["selected"]]["home"])
+                    sync_keyring_from_home(sel_home)
 
-                cmd = arguments
-                if os.name == "nt":
-                    lower = cmd[0].lower()
-                    if lower.endswith((".cmd", ".bat")):
-                        cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/c", *cmd]
-                    elif lower.endswith(".ps1"):
-                        cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", *cmd]
-
-                backup_cred = None
-                if not supports_login:
-                    backup_cred = read_keyring_credential("gemini", "antigravity")
-                    if backup_cred:
-                        delete_keyring_credential("gemini", "antigravity")
-
-                try:
-                    result = subprocess.run(
-                        cmd, env=account_environment(home), check=False
-                    )
-                    if not supports_login:
-                        new_cred = read_keyring_credential("gemini", "antigravity")
-                        if new_cred:
-                            (home / "keyring_token.json").write_text(new_cred, encoding="utf-8")
-                            (home / ".gemini" / "keyring_token.json").write_text(new_cred, encoding="utf-8")
-                finally:
-                    if not supports_login and backup_cred and not read_keyring_credential("gemini", "antigravity"):
-                        write_keyring_credential("gemini", "antigravity", backup_cred)
-
-                if result.returncode:
-                    print(
-                        "Sign-in did not complete. Your account selection is unchanged.",
-                        file=sys.stderr,
-                    )
-                    return (
-                        result.returncode
-                        if result.returncode > 0
-                        else 128 - result.returncode
-                    )
-
-        metadata_failed = False
-        try:
-            identity = asyncio.run(read_identity(binary, home))
-        except (AccountError, OSError):
             if existing_home:
-                raise AccountError(
-                    "Could not verify the email for that saved login. Try again."
-                ) from None
-            identity = {"email": None, "plan": None, "kind": None}
-            metadata_failed = True
-        if existing_home and identity["kind"] == "signedOut":
-            raise AccountError("There is no saved login in that Gemini home.")
-
-        with store.edit() as current:
-            if any(
-                Path(record["home"]).resolve() == home
-                for record in current["accounts"].values()
-            ):
-                raise AccountError(
-                    "That saved login was already added by another terminal."
-                )
-            current["accounts"][account_id] = {"home": str(home), **identity}
-            if current["selected"] is None:
-                current["selected"] = account_id
-        if existing_home:
-            prepare_home(store, home)
-        if identity["email"]:
+                prepare_home(store, home)
             print(f"Added {identity['email']}.")
-        else:
-            print("Login saved. Its email is not available yet.")
-        if metadata_failed:
             print(
-                "Run gemini list accounts --refresh to retry email discovery.",
-                file=sys.stderr,
+                "Run gemini add account to add another, or gemini select account to choose one."
             )
-        print(
-            "Run gemini add account to add another, or gemini select account to choose one."
-        )
-        return 0
+            return 0
+        finally:
+            if home_created and home and home.exists():
+                current_state = store.read()
+                if account_id not in current_state.get("accounts", {}):
+                    shutil.rmtree(home, ignore_errors=True)
 
 
 def list_accounts(
