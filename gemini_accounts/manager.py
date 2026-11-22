@@ -19,6 +19,7 @@ from .native import (
     read_keyring_credential,
     read_rate_limits,
     sync_keyring_from_home,
+    verify_saved_login,
     write_keyring_credential,
     _extract_email_from_jwt,
     _read_identity_from_files,
@@ -191,8 +192,6 @@ def quota_labels(accounts: dict[str, dict]) -> dict[str, str]:
                     write_keyring_credential("gemini", "antigravity", saved_keyring)
                 except Exception:
                     pass
-
-    return asyncio.run(collect())
 
     return asyncio.run(collect())
 
@@ -497,11 +496,16 @@ def choose(
         quotas = quota_labels(state["accounts"])
     title = "Choose an account to remove:" if remove else "Choose the account to use:"
     print(title)
+
+    def label(key: str, record: dict) -> str:
+        text = describe(record)
+        home = Path(record["home"])
+        if home.is_dir() and not _read_identity_from_files(home):
+            return text + "  [no saved login - remove and add again]"
+        return text + (f"  {quotas[key]}" if key in quotas else "")
+
     return pick(
-        [
-            (key, describe(record) + (f"  {quotas[key]}" if key in quotas else ""))
-            for key, record in store.rows(state)
-        ],
+        [(key, label(key, record)) for key, record in store.rows(state)],
         selected=state["selected"],
     )
 
@@ -511,8 +515,10 @@ def select_account(store: Store, selector: str | None = None) -> str | None:
     if key is None:
         return None
     home = store.home(key)
+    expected_email = store.read()["accounts"][key].get("email")
+    verify_saved_login(home, expected_email)
     prepare_home(store, home)
-    sync_keyring_from_home(home)
+    sync_keyring_from_home(home, expected_email)
     with store.edit() as state:
         store.home(key, state)
         state["selected"] = key

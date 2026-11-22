@@ -101,7 +101,8 @@ def manage(store: Store, arguments: list[str]) -> int:
         key = select_account(store, args.email)
         if key is None:
             return 130
-        return launch(store.home(key), []) if args.run else 0
+        email = store.read()["accounts"][key].get("email")
+        return launch(store.home(key), [], email) if args.run else 0
     if args.command == "remove":
         return remove_account(store, args.email)
     if args.command == "share":
@@ -233,7 +234,7 @@ def run(arguments: list[str]) -> int:
         ):
             refresh(store, force=True, only=key)
         return result.returncode if result.returncode >= 0 else 128 - result.returncode
-    return launch(home, arguments)
+    return launch(home, arguments, store.read()["accounts"][key].get("email"))
 
 
 def main() -> int:

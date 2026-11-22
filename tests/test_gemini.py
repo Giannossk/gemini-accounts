@@ -13,11 +13,13 @@ from gemini_accounts.native import (
     account_environment,
     gemini_binary,
     read_identity,
+    sync_keyring_from_home,
+    _fetch_live_quota,
     _read_identity_from_files,
     _read_rate_limits_from_files,
 )
 from gemini_accounts.shared import _merge_json_config, prepare_home
-from gemini_accounts.state import Store, default_root
+from gemini_accounts.state import AccountError, Store, default_root
 
 
 class GeminiAccountsTests(unittest.TestCase):
@@ -138,6 +140,10 @@ class GeminiAccountsTests(unittest.TestCase):
         home1.mkdir()
         home2 = self.root / "h2"
         home2.mkdir()
+        for home, email in ((home1, "user1@example.com"), (home2, "user2@example.com")):
+            (home / "google_accounts.json").write_text(
+                json.dumps({"active": email}), encoding="utf-8"
+            )
 
         with self.store.edit() as state:
             state["accounts"]["id1"] = {"home": str(home1), "email": "user1@example.com", "kind": "google"}
@@ -152,6 +158,67 @@ class GeminiAccountsTests(unittest.TestCase):
         state_after = self.store.read()
         self.assertNotIn("id2", state_after["accounts"])
         self.assertIsNone(state_after["selected"])
+
+    def test_select_account_without_saved_login_is_refused(self):
+        # Regression: an account whose home has no token used to be "selected"
+        # while Gemini kept running with whichever login was left in the keyring.
+        good = self.root / "good"
+        good.mkdir()
+        (good / "google_accounts.json").write_text(
+            json.dumps({"active": "user1@example.com"}), encoding="utf-8"
+        )
+        empty = self.root / "empty"
+        (empty / ".gemini").mkdir(parents=True)
+
+        with self.store.edit() as state:
+            state["accounts"]["id1"] = {"home": str(good), "email": "user1@example.com", "kind": "google"}
+            state["accounts"]["id2"] = {"home": str(empty), "email": "user2@example.com", "kind": "google"}
+            state["selected"] = "id1"
+
+        with patch("gemini_accounts.manager.sync_keyring_from_home") as sync:
+            with self.assertRaisesRegex(AccountError, "user2@example.com has no saved login"):
+                select_account(self.store, "user2@example.com")
+            sync.assert_not_called()
+        self.assertEqual(self.store.read()["selected"], "id1")
+
+    def test_select_account_with_other_users_login_is_refused(self):
+        home = self.root / "mismatch"
+        home.mkdir()
+        (home / "google_accounts.json").write_text(
+            json.dumps({"active": "someone-else@example.com"}), encoding="utf-8"
+        )
+        with self.store.edit() as state:
+            state["accounts"]["id1"] = {"home": str(home), "email": "user1@example.com", "kind": "google"}
+
+        with self.assertRaisesRegex(AccountError, "belongs to someone-else@example.com"):
+            select_account(self.store, "user1@example.com")
+        self.assertIsNone(self.store.read()["selected"])
+
+    def test_sync_keyring_skips_tokens_for_other_emails(self):
+        home = self.root / "sync"
+        (home / ".gemini").mkdir(parents=True)
+        (home / "keyring_token.json").write_text(
+            json.dumps({"id_token_email": "other@example.com", "token": {}}), encoding="utf-8"
+        )
+        (home / ".gemini" / "keyring_token.json").write_text(
+            json.dumps({"id_token_email": "me@example.com", "token": {}}), encoding="utf-8"
+        )
+        with patch("gemini_accounts.native.write_keyring_credential") as write:
+            self.assertTrue(sync_keyring_from_home(home, "me@example.com"))
+            self.assertIn("me@example.com", write.call_args[0][2])
+
+        with patch("gemini_accounts.native.write_keyring_credential") as write:
+            self.assertFalse(sync_keyring_from_home(self.root / "nothing-here"))
+            write.assert_not_called()
+
+    def test_live_quota_does_not_use_global_keyring_for_empty_home(self):
+        home = self.root / "quota_empty"
+        home.mkdir()
+        cred = json.dumps({"token": {"access_token": "someone-elses-token"}})
+        with patch("gemini_accounts.native.read_keyring_credential", return_value=cred), \
+             patch("urllib.request.urlopen") as urlopen:
+            self.assertIsNone(_fetch_live_quota(home))
+            urlopen.assert_not_called()
 
     def test_merge_json_config(self):
         source = self.root / "source.json"

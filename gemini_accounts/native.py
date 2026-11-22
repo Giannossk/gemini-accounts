@@ -338,17 +338,71 @@ def delete_keyring_credential(service: str = "gemini", user: str = "antigravity"
     return False
 
 
-def sync_keyring_from_home(home: Path) -> None:
+def _credential_email(text: str) -> str | None:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    tok = data.get("token") if isinstance(data.get("token"), dict) else {}
+    id_token = data.get("id_token") or tok.get("id_token")
+    if id_token and (email := _extract_email_from_jwt(id_token)):
+        return email
+    for candidate in (
+        data.get("email"),
+        tok.get("email"),
+        data.get("id_token_email"),
+        tok.get("id_token_email"),
+    ):
+        if candidate and valid_email(candidate):
+            return candidate
+    return None
+
+
+def sync_keyring_from_home(home: Path, expected_email: str | None = None) -> bool:
+    """Copy the home's saved token into the system keyring.
+
+    Tokens that belong to a different email than ``expected_email`` are skipped.
+    Returns False (leaving the keyring untouched) when no usable token exists.
+    """
     for base in (home, home / ".gemini"):
         for fname in ("keyring_token.json", "credentials.json"):
             token_file = base / fname
-            if token_file.is_file():
-                try:
-                    token_data = token_file.read_text(encoding="utf-8")
-                    write_keyring_credential("gemini", "antigravity", token_data)
-                    return
-                except Exception:
-                    pass
+            if not token_file.is_file():
+                continue
+            try:
+                token_data = token_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if expected_email:
+                email = _credential_email(token_data)
+                if email and email.casefold() != expected_email.casefold():
+                    continue
+            write_keyring_credential("gemini", "antigravity", token_data)
+            return True
+    return False
+
+
+def verify_saved_login(home: Path, email: str | None = None) -> None:
+    """Refuse to use a home without its own login.
+
+    Without this check Gemini silently starts with whichever account is
+    currently cached in the shared system keyring.
+    """
+    identity = _read_identity_from_files(home)
+    label = email or "The selected account"
+    if not identity or identity.get("kind") != "google" or not identity.get("email"):
+        raise AccountError(
+            f"{label} has no saved login in {home}, so Gemini would start with "
+            "another account. Run gemini remove account"
+            f"{' ' + email if email else ''} and then gemini add account to sign in again."
+        )
+    if email and identity["email"].casefold() != email.casefold():
+        raise AccountError(
+            f"The saved login for {email} belongs to {identity['email']}. Run "
+            f"gemini remove account {email} and then gemini add account to sign in again."
+        )
 
 
 def binary_supports_login(binary: str) -> bool:
@@ -530,17 +584,8 @@ def _fetch_live_quota(home: Path, timeout: float = 5) -> dict | None:
         if token:
             break
 
-    if not token:
-        cred = read_keyring_credential("gemini", "antigravity")
-        if cred:
-            try:
-                data = json.loads(cred)
-                tok_obj = data.get("token") if isinstance(data.get("token"), dict) else data
-                token = tok_obj.get("access_token")
-                refresh_token = tok_obj.get("refresh_token")
-            except Exception:
-                pass
-
+    # Never fall back to the shared system keyring: it holds whichever account
+    # was used last, so its quota would be reported under this account's name.
     if not token:
         return None
 
@@ -620,7 +665,11 @@ def _fetch_cli_quota(binary: str, home: Path, timeout: float = 15) -> dict | Non
         return None
     with _cli_quota_lock:
         try:
-            sync_keyring_from_home(home)
+            synced = sync_keyring_from_home(home)
+            if not synced and not _read_identity_from_files(home):
+                # No login of its own: the CLI would report the quota of
+                # whichever account is left in the shared keyring.
+                return None
             env = account_environment(home)
             gemini_dir = home / ".gemini" if (home / ".gemini").is_dir() else home
             env["GEMINI_DIR"] = str(gemini_dir.resolve())
@@ -682,8 +731,9 @@ async def read_rate_limits(binary: str, home: Path, *, timeout: float = 15) -> d
     return {}
 
 
-def launch(home: Path, arguments: list[str]) -> int:
-    sync_keyring_from_home(home)
+def launch(home: Path, arguments: list[str], email: str | None = None) -> int:
+    verify_saved_login(home, email)
+    sync_keyring_from_home(home, email)
     binary = gemini_binary()
     shared_history = prepare_home(Store(default_root()), home)
     env = account_environment(home)
